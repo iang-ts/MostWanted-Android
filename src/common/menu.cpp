@@ -26,6 +26,7 @@
 #include "common/options.h"
 #include "common/pad_binds.h"
 #include "common/texture_packs.h"
+#include "unlimiter/config.h"
 #include "common/translations.h"
 
 // native/gyro.cpp: steering by tilting the phone
@@ -253,7 +254,7 @@ enum RowId { kRenderResolution, kMaxFps, kVsync, kFpsCounter, kAniso, kAudioOutp
              kReflections, kParticles, kRain, kRainDrops, kShadows, kRoadReflections,
              kCheatNos, kCheatSpeedbreaker, kCheatCash, kCheatNoPolice, kCheatUnlockAll,
              kSkipMovies, kYellowTint, kNightMode, kMotionBlur, kShaderPreload, kCheatDragShift, kCheatNoTraffic,
-             kTexturePacks, kTextureResolution };
+             kTexturePacks, kTextureResolution, kUnlimiter };
 
 using rows::Kind;
 using rows::Row;
@@ -305,6 +306,7 @@ constexpr Row kGeneralRows[] = {
     {Kind::Value, kLanguage, "LANGUAGE"},
     {Kind::Value, kAudioOutput, "AUDIO OUTPUT"},
     {Kind::Value, kSkipMovies, "SKIP MOVIES"},
+    {Kind::Value, kUnlimiter, "UNLIMITER"},
 };
 
 // the panel's alone: the game's options menu (src/game/options_menu.cpp) shows no section of it
@@ -393,6 +395,7 @@ bool* ToggleFlag(Settings& s, int id) {
         case kCheatDragShift: return &o.cheat_drag_shift;
         case kCheatNoTraffic: return &o.cheat_no_traffic;
         case kSkipMovies: return &o.skip_movies;
+        case kUnlimiter: return &o.unlimiter;
         default: return nullptr;
     }
 }
@@ -959,7 +962,8 @@ const rows::Row* rows::Page(int page, size_t* count) {
         return kTouchRows;
     }
     if (page == kGeneralPage) {
-        *count = std::size(kGeneralRows);
+        static_assert(kGeneralRows[std::size(kGeneralRows) - 1].id == kUnlimiter);
+        *count = std::size(kGeneralRows) - (unlimiter::Imported() ? 0 : 1);
         return kGeneralRows;
     }
     if (page == kCreditsPage) {

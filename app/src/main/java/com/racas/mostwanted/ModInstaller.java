@@ -32,6 +32,8 @@ final class ModInstaller {
     private static final String ZDIR = "NFS/ZDIR.BIN", LIST = "cars.txt", TYPES = "car_types.txt", REMOVED = "cars_removed.txt";
     private static final String GARAGE = "garage", INFO = "info.txt", GEOMETRY = "geometry.bin", TEXTURES = "textures.bin";
     private static final String SCRIPT = "script.nfsms", LOGO = "logo.dxt";
+    private static final String PARTS = "parts.bin", CAR_TYPE = "cartype.bin", COLLISION = "collision.bin", VINYLS = "vinyls.bin";
+    private static final String UNLIMITER = "unlimiter.ini", STRINGS = "strings.txt", ADDED = "addtex.bin", MAKES = "makes.txt";
 
     private ModInstaller() {}
 
@@ -86,6 +88,14 @@ final class ModInstaller {
                 File script = new File(d, SCRIPT), logo = new File(d, LOGO);
                 if (script.exists()) k.script = Files.readAllBytes(script.toPath());
                 if (logo.exists()) k.logo = Files.readAllBytes(logo.toPath());
+                k.parts = optional(new File(d, PARTS));
+                k.carType = optional(new File(d, CAR_TYPE));
+                k.collision = optional(new File(d, COLLISION));
+                k.unlimiter = optional(new File(d, UNLIMITER));
+                File vinyls = new File(d, VINYLS);
+                if (vinyls.isFile()) k.vinyls = vinyls;
+                readStrings(new File(d, STRINGS), k.strings);
+                readAdded(new File(d, ADDED), k.added);
                 if (k.geometry.exists() && k.textures.exists()) out.add(k);
             } catch (IOException | RuntimeException e) {
                 // half written: it is not a car, and the next install of it writes it again
@@ -103,20 +113,35 @@ final class ModInstaller {
     // from the archive to the garage, every car in it, then the game's files again, once. A car that will not go in leaves the
     // others in; the first's failure is thrown only if none went. The same car a second time takes its old place's files
     static Installed install(Context context, File archive, String pageTitle, Consumer<String> log) throws Exception {
+        return install(context, archive, pageTitle, null, log);
+    }
+
+    static Installed install(Context context, File archive, String pageTitle, BinaryScript.Chooser chooser, Consumer<String> log) throws Exception {
         File game = findGame(context);
         if (game == null) throw new IOException("no game");
         File spool = new File(new File(context.getCacheDir(), "mods"), "spool");
         try {
-            return install(context, game, archive, spool, pageTitle, log);
+            return install(context, game, archive, spool, pageTitle, chooser, log);
         } finally {
             ModArchive.clear(spool);
         }
     }
 
-    private static Installed install(Context context, File game, File archive, File spool, String pageTitle, Consumer<String> log) throws Exception {
+    private static Installed install(Context context, File game, File archive, File spool, String pageTitle, BinaryScript.Chooser chooser,
+                                     Consumer<String> log) throws Exception {
         Map<String, File> files = ModArchive.read(archive, spool, log);
         List<String> paths = CarConverter.carPaths(files.keySet());
         Installed result = new Installed();
+        if (UnlimiterImport.isUnlimiter(files.keySet())) {
+            stopGame(context);
+            UnlimiterImport.install(files, log);
+            result.done.add("NFSMW Unlimiter");
+            if (paths.isEmpty()) {
+                // its vault scripts go into the game's files with the cars'
+                if (!kept().isEmpty()) rebuild(context, game, log);
+                return result;
+            }
+        }
         // texture packs (TexturePacks), each a folder of its own; the cars' files are not touched by them
         if (!TexturePacks.packPaths(files.keySet()).isEmpty()) {
             result.done.addAll(TexturePacks.install(context, files, log));
@@ -133,7 +158,8 @@ final class ModInstaller {
                 String car = CarConverter.carName(path);
                 log.accept("car " + (paths.indexOf(path) + 1) + "/" + paths.size() + ": " + car);
                 try {
-                    CarConverter.Package pack = CarConverter.convert(disc, CarConverter.carFiles(files, path), path, CarConverter.MAX_TEXTURES_KB, log);
+                    CarConverter.Package pack = CarConverter.convert(disc, CarConverter.carFiles(files, path), path, CarConverter.MAX_TEXTURES_KB,
+                            chooser, log);
                     // one car with no strings of its own: the site's name for it (a pack's page names the pack)
                     if (paths.size() == 1 && pack.title.equals(CarConverter.titleCase(pack.car)) && pageTitle != null && !pageTitle.isEmpty())
                         pack.title = pageTitle;
@@ -165,14 +191,76 @@ final class ModInstaller {
             throw new CarConverter.Failure(CarConverter.Failure.Reason.UNSUPPORTED, "more than " + CarConverter.MAX_ADDONS + " cars");
         if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("cannot write to " + dir);
         new File(dir, INFO).delete();  // not a car until it is whole
-        new File(dir, SCRIPT).delete();
-        new File(dir, LOGO).delete();
+        for (String name : new String[] {SCRIPT, LOGO, PARTS, CAR_TYPE, COLLISION, VINYLS, UNLIMITER, STRINGS, ADDED})
+            new File(dir, name).delete();
         write(new File(dir, GEOMETRY), pack.geometry);
         write(new File(dir, TEXTURES), pack.textures);
         if (pack.script != null) write(new File(dir, SCRIPT), pack.script);
         if (pack.logo != null) write(new File(dir, LOGO), pack.logo);
+        if (pack.parts != null) write(new File(dir, PARTS), pack.parts);
+        if (pack.carType != null) write(new File(dir, CAR_TYPE), pack.carType);
+        if (pack.collision != null) write(new File(dir, COLLISION), pack.collision);
+        if (pack.vinyls != null) write(new File(dir, VINYLS), pack.vinyls);
+        if (pack.unlimiter != null) write(new File(dir, UNLIMITER), pack.unlimiter);
+        if (!pack.strings.isEmpty()) write(new File(dir, STRINGS), stringsBytes(pack.strings));
+        if (!pack.added.isEmpty()) write(new File(dir, ADDED), addedBytes(pack.added));
         write(new File(dir, INFO), (pack.car + "\n" + pack.title + "\n" + pack.manufacturer + "\n" + pack.logoWidth + "\n"
                 + pack.logoHeight + "\n" + pack.logoFormat + "\n").getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static byte[] optional(File f) throws IOException {
+        return f.isFile() ? Files.readAllBytes(f.toPath()) : null;
+    }
+
+    private static byte[] stringsBytes(Map<String, Map<Integer, String>> strings) {
+        StringBuilder s = new StringBuilder();
+        for (Map.Entry<String, Map<Integer, String>> e : strings.entrySet())
+            for (Map.Entry<Integer, String> line : e.getValue().entrySet())
+                s.append(e.getKey()).append('\t').append(String.format("%08x", line.getKey())).append('\t')
+                        .append(line.getValue().replace('\n', ' ').replace('\t', ' ')).append('\n');
+        return s.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static void readStrings(File f, Map<String, Map<Integer, String>> out) throws IOException {
+        if (!f.isFile()) return;
+        for (String l : Files.readAllLines(f.toPath(), StandardCharsets.UTF_8)) {
+            String[] w = l.split("\t", 3);
+            if (w.length < 3) continue;
+            out.computeIfAbsent(w[0], x -> new java.util.LinkedHashMap<>()).put((int) Long.parseLong(w[1], 16), w[2]);
+        }
+    }
+
+    private static byte[] addedBytes(List<CarConverter.AddedTexture> added) throws IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        java.io.DataOutputStream d = new java.io.DataOutputStream(out);
+        for (CarConverter.AddedTexture t : added) {
+            d.writeInt(t.hash);
+            d.writeInt(t.width);
+            d.writeInt(t.height);
+            d.writeInt(t.format);
+            d.writeInt(t.data.length);
+            d.write(t.data);
+        }
+        d.flush();
+        return out.toByteArray();
+    }
+
+    private static void readAdded(File f, List<CarConverter.AddedTexture> out) throws IOException {
+        if (!f.isFile()) return;
+        try (java.io.DataInputStream d = new java.io.DataInputStream(new java.io.BufferedInputStream(new java.io.FileInputStream(f)))) {
+            while (d.available() > 0) {
+                CarConverter.AddedTexture t = new CarConverter.AddedTexture();
+                t.hash = d.readInt();
+                t.width = d.readInt();
+                t.height = d.readInt();
+                t.format = d.readInt();
+                int n = d.readInt();
+                if (n < 0 || n > (64 << 20)) throw new IOException("a texture's size");
+                t.data = new byte[n];
+                d.readFully(t.data);
+                out.add(t);
+            }
+        }
     }
 
     // the car select's name for a car with no SECONDARY_LOGO: a texture no pack has draws as "temp350"
@@ -195,7 +283,7 @@ final class ModInstaller {
 
     // what the garage's cars were last built with. A converter fix that kept cars need too bumps it (2: reflection flags by
     // shader, fitGeometry), and the Mods Loader offers to build them again once
-    static final int BUILD = 2;
+    static final int BUILD = 3;
     private static final String BUILT = ".built";
 
     static boolean outdated() {
@@ -241,8 +329,8 @@ final class ModInstaller {
             CarConverter.Built built = null;
             if (!kept.isEmpty()) {
                 try (CarConverter.Disc disc = new CarConverter.Disc(game)) {
-                    for (CarConverter.Kept k : kept) CarConverter.fitGeometry(disc, k.geometry, log);
-                    built = CarConverter.build(disc, kept, work, log);
+                    for (CarConverter.Kept k : kept) CarConverter.fitGeometry(disc, k.geometry, k.parts != null, log);
+                    built = CarConverter.build(disc, kept, work, UnlimiterImport.vault(), log);
                 }
                 for (Map.Entry<String, byte[]> e : built.files.entrySet())
                     if (e.getValue() != null) write(new File(work, e.getKey().replace('/', '_')), e.getValue());
@@ -277,6 +365,14 @@ final class ModInstaller {
         if (names != null) for (File f : names) f.delete();
         File[] archives = new File(dir, "NFS").listFiles((d, n) -> n.toUpperCase(Locale.ROOT).matches("ZZDATA\\d+\\.BIN"));
         if (archives != null) for (File f : archives) f.delete();
+        new File(dir, MAKES).delete();
+        new File(dir, CarConverter.ADDED_LIST).delete();
+        for (String sub : new String[] {CarConverter.ADDED_DIR, CarConverter.STRINGS_DIR, CarConverter.UNLIMITER_CARS}) {
+            File d = new File(dir, sub);
+            File[] in = d.listFiles(File::isFile);
+            if (in != null) for (File f : in) f.delete();
+            d.delete();
+        }
     }
 
     private static Set<String> listedKeys() throws IOException {
@@ -316,6 +412,8 @@ final class ModInstaller {
     }
 
     private static void move(File from, File to) throws IOException {
+        File parent = to.getParentFile();
+        if (parent != null && !parent.isDirectory() && !parent.mkdirs()) throw new IOException("cannot write to " + parent);
         if (!from.renameTo(to)) throw new IOException("cannot move " + from.getName() + " to " + to);
     }
 

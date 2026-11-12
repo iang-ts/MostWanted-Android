@@ -325,7 +325,9 @@ public class ModsActivity extends Activity {
             // our own package: always there
         }
         box.addView(versionRow("Most Wanted Android", app), spaced(dp(6)));
-        box.addView(versionRow("Mods Loader", LOADER_VERSION), spaced(0));
+        box.addView(versionRow("Mods Loader", LOADER_VERSION), spaced(dp(6)));
+        box.addView(versionRow("NFSMW Unlimiter", getString(hasAccess() && UnlimiterImport.installed() ? R.string.mods_unlimiter_on
+                : R.string.mods_unlimiter_off)), spaced(0));
         return box;
     }
 
@@ -744,7 +746,7 @@ public class ModsActivity extends Activity {
             ModInstaller.Installed result = null;
             String error = null;
             try {
-                result = ModInstaller.install(this, file, null, line -> {
+                result = ModInstaller.install(this, file, null, this::chooseOnUi, line -> {
                     Log.i(TAG, line);
                     // a pack takes minutes: which car it has got to
                     if (line.startsWith("car ") || line.startsWith("pack "))
@@ -776,6 +778,31 @@ public class ModsActivity extends Activity {
                 else if (why != null) tell(R.string.mods_failed, why);
             });
         }, "ModInstall").start();
+    }
+
+    private int chooseOnUi(String title, java.util.List<String> options) {
+        int automatic = BinaryScript.FIRST.choose(title, options);
+        if (options.size() < 2 || automatic != 0 || options.get(0).toLowerCase(java.util.Locale.ROOT).contains("install")) return automatic;
+        java.util.concurrent.CountDownLatch done = new java.util.concurrent.CountDownLatch(1);
+        int[] pick = {0};
+        runOnUiThread(() -> {
+            if (isDestroyed()) {
+                done.countDown();
+                return;
+            }
+            new AlertDialog.Builder(this)
+                    .setTitle(title.isEmpty() ? getString(R.string.mods_install) : title)
+                    .setSingleChoiceItems(options.toArray(new String[0]), 0, (d, w) -> pick[0] = w)
+                    .setCancelable(false)
+                    .setPositiveButton(R.string.mods_next, (d, w) -> done.countDown())
+                    .show();
+        });
+        try {
+            done.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return pick[0];
     }
 
     private String explain(CarConverter.Failure e) {

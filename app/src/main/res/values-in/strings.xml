@@ -56,6 +56,8 @@
     <string name="mods_update">Perbarui</string>
     <string name="mods_later">Nanti</string>
     <string name="mods_version">Versi</string>
+    <string name="mods_unlimiter_on">Diimpor</string>
+    <string name="mods_unlimiter_off">Belum diimpor: pasang zip-nya dari file</string>
     <string name="mods_credit_cars">Mobil karya para pembuatnya, dari NFSAddons dan NFSMods</string>
     <string name="mods_open_site_sub">Buka situsnya di browser</string>
     <string name="mods_from_file_sub">File ZIP, 7z, atau RAR yang sudah diunduh</string>

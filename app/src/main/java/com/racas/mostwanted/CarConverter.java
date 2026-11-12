@@ -51,7 +51,7 @@ final class CarConverter {
     }
     // the parts' car index is a byte, and the game's cars take 99 of them
     static final int MAX_ADDONS = 150;
-    static final int MAX_TEXTURES_KB = 1536;
+    static final int MAX_TEXTURES_KB = 8192;
 
     // what a mod cannot be made into, for the player
     static final class Failure extends Exception {
@@ -69,6 +69,9 @@ final class CarConverter {
         String car, title, manufacturer;
         byte[] geometry, textures, script, logo;  // script and logo may be null
         int logoWidth, logoHeight, logoFormat;
+        byte[] parts, carType, collision, vinyls, unlimiter;
+        final Map<String, Map<Integer, String>> strings = new LinkedHashMap<>();
+        final List<AddedTexture> added = new ArrayList<>();
     }
 
     // a kept car for build: its two big files by path
@@ -77,6 +80,15 @@ final class CarConverter {
         File geometry, textures;
         byte[] script, logo;
         int logoWidth, logoHeight, logoFormat;
+        byte[] parts, carType, collision, unlimiter;
+        File vinyls;
+        final Map<String, Map<Integer, String>> strings = new LinkedHashMap<>();
+        final List<AddedTexture> added = new ArrayList<>();
+    }
+
+    static final class AddedTexture {
+        int hash, width, height, format;
+        byte[] data;
     }
 
     static final class Built {
@@ -86,7 +98,7 @@ final class CarConverter {
 
     private static final Pattern WANTED = Pattern.compile(
             "(.*/)?([^/]+/(geometry|textures)\\.bin|cartypeinfo[^/]*\\.bin|[^/]*\\.nfsms|[^/]*\\.end"
-            + "|secondary_logo_[^/]*\\.dds)");
+            + "|secondary_logo_[^/]*\\.dds|(dbmodelpart|collision|carpart)[^/]*\\.bin|vinyls\\.bin|[^/]*\\.ini)");
 
     // an archive's files worth keeping for convert, its paths with / in them
     static boolean wanted(String path) {
@@ -100,7 +112,7 @@ final class CarConverter {
         return (n + a - 1) & ~(a - 1);
     }
 
-    private static int i32(byte[] b, int o) {
+    static int i32(byte[] b, int o) {
         return (b[o] & 255) | (b[o + 1] & 255) << 8 | (b[o + 2] & 255) << 16 | (b[o + 3] & 255) << 24;
     }
 
@@ -112,7 +124,7 @@ final class CarConverter {
         return Float.intBitsToFloat(i32(b, o));
     }
 
-    private static void put32(byte[] b, int o, int v) {
+    static void put32(byte[] b, int o, int v) {
         b[o] = (byte) v;
         b[o + 1] = (byte) (v >> 8);
         b[o + 2] = (byte) (v >> 16);
@@ -542,6 +554,10 @@ final class CarConverter {
             if (right != 0) walk(t, right, out, depth + 1);
         }
 
+        boolean has(String path) {
+            return recs.containsKey(bhash(path));
+        }
+
         long archiveSize(int i) {
             long[] e = nfs.get("ZZDATA" + i + ".BIN");
             return e == null ? -1 : e[1];
@@ -636,6 +652,10 @@ final class CarConverter {
 
     // a block of a pack: EA's compressed forms have a 16 byte header, the size within at +8. RAWW only stores; a block with
     // no header is stored as it is
+    static byte[] unpackBlock(byte[] block) throws Failure {
+        return unpack(block, block.length);
+    }
+
     private static byte[] unpack(byte[] block, int usize) throws Failure {
         if (isJdlz(block, 0)) return jdlzDecode(block);
         String magic = block.length >= 4 ? latin(block, 0, 4) : "";
@@ -716,7 +736,7 @@ final class CarConverter {
         int lod = name.isEmpty() ? -1 : "ABCD".indexOf(name.charAt(name.length() - 1));
         if (lod < 0 || name.length() < 2 || name.charAt(name.length() - 2) != '_') return null;
         Solid s = new Solid();
-        s.name = name.substring(0, name.length() - 1) + "BCDE".charAt(lod);
+        s.name = name.contains("_DECAL_") ? name : name.substring(0, name.length() - 1) + "BCDE".charAt(lod);
         s.hash = bhash(s.name);
         int nIdx = idx.length / 2;
         Buf gr = new Buf(), ib = new Buf();
@@ -796,8 +816,9 @@ final class CarConverter {
     // the car pool holds every car of a race (src/game/car_mods.cpp makes it 39 MB, the disc's is 7550 KB), and a car loads
     // about its whole file. PC mods often repeat their best model at every LOD: those lower LODs are thinned to their share,
     // and only a car over this limit has its best models cut
-    private static final double[] LOD_SHARE = {1, 0.12, 0.04, 0.015};  // of the part's best, by LODs below it: the player sees the best
-    private static final long MAX_GEOMETRY = 12L << 20;
+    private static final double[] LOD_SHARE = {1, 0.5, 0.25, 0.12};  // of the part's best, by LODs below it: the player sees the best
+    private static final double OWN_LOD = 1.5;
+    private static final long MAX_GEOMETRY = 24L << 20;
     private static final int VERTEX = 32;  // pos, uv, normal
 
     private static long solidBytes(Solid s) {
@@ -826,6 +847,25 @@ final class CarConverter {
         return low;
     }
 
+    private static final Pattern WHEEL_SOLID = Pattern.compile(".*_(TIRE|WHEEL)_[A-E]");
+
+    private static void copyAs(Solid from, Solid to) {
+        to.flags = from.flags;
+        to.verts = from.verts;
+        to.ngroups = from.ngroups;
+        to.tris = from.tris;
+        to.tex = from.tex.clone();
+        to.sha = from.sha.clone();
+        to.groups = from.groups.clone();
+        to.ib = from.ib.clone();
+        to.vb = new ArrayList<>();
+        for (byte[] v : from.vb) to.vb.add(v.clone());
+        byte[] head = Arrays.copyOf(from.head, 0xA0);
+        put32(head, 0x10, to.hash);
+        byte[] nm = latin(to.name + "\0");
+        to.head = cat(head, nm, fill(align(nm.length, 4) - nm.length, 0));
+    }
+
     private static void reduceLods(List<Solid> solids, Consumer<String> log) {
         Map<String, Solid> best = new HashMap<>();
         for (Solid s : solids) {
@@ -833,6 +873,15 @@ final class CarConverter {
             Solid b = best.get(part);
             if (b == null || s.name.compareTo(b.name) < 0) best.put(part, s);
         }
+        int wheels = 0;
+        for (Solid s : solids) {
+            Solid b = best.get(s.name.substring(0, s.name.length() - 1));
+            if (b != s && WHEEL_SOLID.matcher(s.name).matches()) {
+                copyAs(b, s);
+                wheels++;
+            }
+        }
+        if (wheels > 0) log.accept("geometry: " + wheels + " wheel LODs given their best model");
         long before = 0;
         for (Solid s : solids) before += solidBytes(s);
         for (Solid s : solids)
@@ -853,7 +902,9 @@ final class CarConverter {
         for (Solid s : solids) {
             Solid b = best.get(s.name.substring(0, s.name.length() - 1));
             int below = s.name.charAt(s.name.length() - 1) - b.name.charAt(b.name.length() - 1);
-            if (below > 0) reduceSolid(s, (int) (b.tris * LOD_SHARE[Math.min(below, LOD_SHARE.length - 1)]), false);
+            if (below <= 0 || WHEEL_SOLID.matcher(s.name).matches()) continue;
+            int target = (int) (b.tris * LOD_SHARE[Math.min(below, LOD_SHARE.length - 1)]);
+            if (s.tris > target * OWN_LOD) reduceSolid(s, target, false);
         }
         // the lower LODs may have stopped above their share: the best ones pay for it
         for (int round = 0; round < 4 && totalBytes(solids) > MAX_GEOMETRY; round++) {
@@ -1176,6 +1227,10 @@ final class CarConverter {
 
     // a kept car with attachments or over the limit put right where it lies, so a car from an older install needs no new download
     static void fitGeometry(Disc disc, File geometry, Consumer<String> log) throws Failure, IOException {
+        fitGeometry(disc, geometry, false, log);
+    }
+
+    static void fitGeometry(Disc disc, File geometry, boolean ownParts, Consumer<String> log) throws Failure, IOException {
         byte[] g = Files.readAllBytes(geometry.toPath());
         if (relight(g)) {
             File temp = new File(geometry.getPath() + ".new");
@@ -1187,7 +1242,7 @@ final class CarConverter {
         if (solids.isEmpty()) return;
         for (Solid s : solids)
             if (s.groups == null || s.ib == null || s.vb.size() != s.ngroups || s.groups.length != s.ngroups * 96) return;
-        boolean merged = mergeAttachments(solids, log);
+        boolean merged = !ownParts && mergeAttachments(solids, log);
         if (!merged && geometry.length() <= MAX_GEOMETRY + (64L << 10)) return;
         reduceLods(solids, log);
         File temp = new File(geometry.getPath() + ".new");
@@ -1596,8 +1651,17 @@ final class CarConverter {
     private static final class Texture {
         int hash, w, h;
         String name, fmt;
-        byte[] px;
+        byte[] px, look, palette;
     }
+
+    private static final String PALETTED = "P8", PALETTED_MASK = "P8_MASK";
+    private static final int PALETTE_COLOURS = 256, PALETTE_BYTES = PALETTE_COLOURS * 4;
+    // the skin's palette (0x250890) is 5 paint entries and then the vinyl's first NUMCOLOURS, a vinyl pixel's index + 5:
+    // an index past NUMCOLOURS takes an entry never filled
+    static final int VINYL_COLOURS = 64, VINYL_PART = 0x4F, NUM_COLOURS = 0x564B8CB6;
+    private static final int NV2A_P8 = 0x0B, VINYL_KIND = 0x80, MASK_KIND = 0x08;
+
+    private static final int LOOK = 0x2D, LOOK_SIZE = 6;
 
     private static int xboxFormat(String fmt) {
         switch (fmt) {
@@ -1798,14 +1862,274 @@ final class CarConverter {
             t.name = text(d, at - 24, at);
             t.w = u16(d, at + 0x20);
             t.h = u16(d, at + 0x22);
+            t.look = sub(d, at + LOOK, at + LOOK + LOOK_SIZE);
             Matcher m = DXT.matcher(latin(d, at, d.length - at));
-            if (!m.find()) continue;  // a format no Xbox record is copied for: one texture less, not one car less
+            if (!m.find()) {
+                if (t.w > 0 && t.h > 0 && (long) t.w * t.h * 4 <= at - 24) {
+                    encodeArgb(t, d);
+                    out.add(t);
+                }
+                continue;
+            }
             t.fmt = m.group();
             if (xboxFormat(t.fmt) < 0) throw new Failure(Failure.Reason.UNSUPPORTED, t.name + " is " + t.fmt);
             t.px = Arrays.copyOf(d, ((t.w + 3) / 4) * ((t.h + 3) / 4) * blockSize(t.fmt));  // the first level alone
             out.add(t);
         }
         return out;
+    }
+
+    private static List<Texture> readModVinyls(byte[] mt, int maxSide) throws Failure {
+        int[] table = null;
+        for (int[] c : walkAll(mt, 0, mt.length))
+            if (c[0] == 0x33310003) table = c;
+        if (table == null) throw new Failure(Failure.Reason.UNSUPPORTED, "VINYLS.BIN is not a compressed pack");
+        List<Texture> out = new ArrayList<>();
+        java.util.Set<Integer> hashes = new HashSet<>(), masks = new HashSet<>();
+        for (int i = 0; i + 24 <= table[1]; i += 24) hashes.add(i32(mt, table[2] + i));
+        for (int h : hashes)
+            if (hashes.contains(hashFrom("_MASK", h))) masks.add(hashFrom("_MASK", h));
+        for (int i = 0; i + 24 <= table[1]; i += 24) {
+            int h = i32(mt, table[2] + i), off = i32(mt, table[2] + i + 4), cs = i32(mt, table[2] + i + 8), us = i32(mt, table[2] + i + 12);
+            byte[] d = unpack(sub(mt, off, off + cs), us);
+            int at = rfind(d, ints(h));
+            if (at < 24) continue;
+            int w = u16(d, at + 0x20), hh = u16(d, at + 0x22);
+            if (w <= 0 || hh <= 0 || Integer.bitCount(w) != 1 || Integer.bitCount(hh) != 1) continue;
+            int[] argb;
+            Matcher m = DXT.matcher(latin(d, at, d.length - at));
+            if (m.find()) {
+                if (xboxFormat(m.group()) < 0) continue;
+                argb = decodeDxt(d, w, hh, m.group());
+            } else if ((long) w * hh * 4 <= at - 24) {
+                argb = new int[w * hh];
+                for (int p = 0; p < argb.length; p++)
+                    argb[p] = (d[p * 4 + 3] & 255) << 24 | (d[p * 4 + 2] & 255) << 16 | (d[p * 4 + 1] & 255) << 8 | (d[p * 4] & 255);
+            } else {
+                continue;
+            }
+            while (Math.max(w, hh) > maxSide && w > 1 && hh > 1) {
+                argb = halve(argb, w, hh);
+                w /= 2;
+                hh /= 2;
+            }
+            Texture t = new Texture();
+            t.hash = h;
+            t.name = text(d, at - 24, at);
+            t.w = w;
+            t.h = hh;
+            byte[] linear = new byte[w * hh];
+            boolean mask = masks.contains(h);
+            t.palette = quantize(argb, linear, mask ? PALETTE_COLOURS : VINYL_COLOURS);
+            t.px = new byte[w * hh];
+            for (int y = 0; y < hh; y++)
+                for (int x = 0; x < w; x++) t.px[swizzle(x, y, w, hh)] = linear[y * w + x];
+            t.fmt = mask ? PALETTED_MASK : PALETTED;
+            out.add(t);
+        }
+        return out;
+    }
+
+    static void vinylColours(BinaryCollection.Part p) {
+        for (BinaryCollection.Attribute a : p.attributes)
+            if (a.key == NUM_COLOURS) {
+                a.kind = BinaryCollection.INT;
+                a.value = VINYL_COLOURS;
+                return;
+            }
+        BinaryCollection.Attribute a = new BinaryCollection.Attribute();
+        a.key = NUM_COLOURS;
+        a.kind = BinaryCollection.INT;
+        a.value = VINYL_COLOURS;
+        p.attributes.add(a);
+    }
+
+    private static int hashFrom(String text, int start) {
+        int h = start;
+        for (byte b : latin(text)) h = h * 33 + (b & 255);
+        return h;
+    }
+
+    private static int[] halve(int[] argb, int w, int h) {
+        int nw = w / 2, nh = h / 2;
+        int[] out = new int[nw * nh];
+        for (int y = 0; y < nh; y++)
+            for (int x = 0; x < nw; x++) {
+                int a = 0, r = 0, g = 0, b = 0;
+                for (int k = 0; k < 4; k++) {
+                    int c = argb[(y * 2 + (k >> 1)) * w + x * 2 + (k & 1)];
+                    a += c >>> 24;
+                    r += (c >> 16) & 255;
+                    g += (c >> 8) & 255;
+                    b += c & 255;
+                }
+                out[y * nw + x] = (a / 4) << 24 | (r / 4) << 16 | (g / 4) << 8 | (b / 4);
+            }
+        return out;
+    }
+
+    private static int[] decodeDxt(byte[] px, int w, int h, String fmt) {
+        int bs = blockSize(fmt), bw = Math.max(1, (w + 3) / 4), bh = Math.max(1, (h + 3) / 4);
+        int[] out = new int[w * h];
+        int[] alpha = new int[16];
+        for (int by = 0; by < bh; by++)
+            for (int bx = 0; bx < bw; bx++) {
+                int at = (by * bw + bx) * bs, cb = at + bs - 8;
+                if (at + bs > px.length) return out;
+                boolean dxt1 = bs == 8;
+                if (fmt.equals("DXT3")) {
+                    for (int i = 0; i < 16; i++) alpha[i] = ((u16(px, at + (i / 4) * 2) >> (4 * (i % 4))) & 15) * 17;
+                } else if (fmt.equals("DXT5")) {
+                    int a0 = px[at] & 255, a1 = px[at + 1] & 255;
+                    long bits = 0;
+                    for (int k = 0; k < 6; k++) bits |= (long) (px[at + 2 + k] & 255) << (8 * k);
+                    for (int i = 0; i < 16; i++) {
+                        int code = (int) (bits >>> (3 * i)) & 7;
+                        int a;
+                        if (code == 0) a = a0;
+                        else if (code == 1) a = a1;
+                        else if (a0 > a1) a = ((8 - code) * a0 + (code - 1) * a1) / 7;
+                        else if (code < 6) a = ((6 - code) * a0 + (code - 1) * a1) / 5;
+                        else a = code == 6 ? 0 : 255;
+                        alpha[i] = a;
+                    }
+                } else {
+                    Arrays.fill(alpha, 255);
+                }
+                int c0 = u16(px, cb), c1 = u16(px, cb + 2), bits = i32(px, cb + 4);
+                double[] a = rgb565(c0), b = rgb565(c1);
+                double[][] pal = dxt1 && c0 <= c1
+                        ? new double[][] {a, b, blend(a, b, 1, 1, 2), {0, 0, 0}}
+                        : new double[][] {a, b, blend(a, b, 2, 1, 3), blend(a, b, 1, 2, 3)};
+                for (int i = 0; i < 16; i++) {
+                    int x = bx * 4 + (i & 3), y = by * 4 + (i >> 2);
+                    if (x >= w || y >= h) continue;
+                    int k = (bits >>> (2 * i)) & 3;
+                    int al = dxt1 && c0 <= c1 && k == 3 ? 0 : alpha[i];
+                    double[] c = pal[k];
+                    out[y * w + x] = al << 24 | (int) c[0] << 16 | (int) c[1] << 8 | (int) c[2];
+                }
+            }
+        return out;
+    }
+
+    // median cut over the distinct colours, alpha one of the four channels: each pixel takes its box's index
+    private static byte[] quantize(int[] argb, byte[] indices, int most) {
+        Map<Integer, Integer> counts = new HashMap<>();
+        for (int c : argb) counts.merge(c, 1, Integer::sum);
+        int n = counts.size();
+        int[] colours = new int[n], weights = new int[n];
+        int k = 0;
+        for (Map.Entry<Integer, Integer> e : counts.entrySet()) {
+            colours[k] = e.getKey();
+            weights[k++] = e.getValue();
+        }
+        List<long[]> boxes = new ArrayList<>();
+        boxes.add(boxOf(colours, weights, 0, n));
+        long[] keys = new long[n];
+        while (boxes.size() < most) {
+            int best = -1;
+            for (int b = 0; b < boxes.size(); b++)
+                if (boxes.get(b)[3] > 0 && (best < 0 || boxes.get(b)[3] > boxes.get(best)[3])) best = b;
+            if (best < 0) break;
+            long[] box = boxes.get(best);
+            int from = (int) box[0], to = (int) box[1], shift = (int) box[2] * 8;
+            for (int i = from; i < to; i++) keys[i] = (long) ((colours[i] >>> shift) & 255) << 32 | i;
+            Arrays.sort(keys, from, to);
+            int[] c2 = new int[to - from], w2 = new int[to - from];
+            long total = 0;
+            for (int i = from; i < to; i++) {
+                int src = (int) keys[i];
+                c2[i - from] = colours[src];
+                w2[i - from] = weights[src];
+                total += weights[src];
+            }
+            System.arraycopy(c2, 0, colours, from, c2.length);
+            System.arraycopy(w2, 0, weights, from, w2.length);
+            long run = 0;
+            int cut = from + 1;
+            for (int i = from; i < to - 1; i++) {
+                run += weights[i];
+                cut = i + 1;
+                if (run * 2 >= total) break;
+            }
+            boxes.set(best, boxOf(colours, weights, from, cut));
+            boxes.add(boxOf(colours, weights, cut, to));
+        }
+        byte[] palette = new byte[PALETTE_BYTES];
+        Map<Integer, Integer> index = new HashMap<>(n * 2);
+        for (int b = 0; b < boxes.size(); b++) {
+            long[] box = boxes.get(b);
+            long a = 0, r = 0, g = 0, bl = 0, w = 0;
+            for (int i = (int) box[0]; i < (int) box[1]; i++) {
+                int c = colours[i], wt = weights[i];
+                a += (long) (c >>> 24) * wt;
+                r += (long) ((c >> 16) & 255) * wt;
+                g += (long) ((c >> 8) & 255) * wt;
+                bl += (long) (c & 255) * wt;
+                w += wt;
+                index.put(c, b);
+            }
+            if (w == 0) continue;
+            palette[b * 4] = (byte) (bl / w);
+            palette[b * 4 + 1] = (byte) (g / w);
+            palette[b * 4 + 2] = (byte) (r / w);
+            palette[b * 4 + 3] = (byte) (a / w);
+        }
+        for (int i = 0; i < argb.length; i++) indices[i] = (byte) (int) index.get(argb[i]);
+        return palette;
+    }
+
+    // from, to, the widest channel, and how much splitting it is worth: its range by the pixels in it
+    private static long[] boxOf(int[] colours, int[] weights, int from, int to) {
+        int[] lo = {255, 255, 255, 255}, hi = {0, 0, 0, 0};
+        long weight = 0;
+        for (int i = from; i < to; i++) {
+            int c = colours[i];
+            for (int ch = 0; ch < 4; ch++) {
+                int v = (c >>> (ch * 8)) & 255;
+                if (v < lo[ch]) lo[ch] = v;
+                if (v > hi[ch]) hi[ch] = v;
+            }
+            weight += weights[i];
+        }
+        int channel = 0;
+        for (int ch = 1; ch < 4; ch++)
+            if (hi[ch] - lo[ch] > hi[channel] - lo[channel]) channel = ch;
+        long score = to - from < 2 ? 0 : (long) (hi[channel] - lo[channel]) * weight;
+        return new long[] {from, to, channel, score};
+    }
+
+    private static void encodeArgb(Texture t, byte[] d) {
+        boolean alpha = false;
+        for (int i = 3; i < t.w * t.h * 4; i += 4)
+            if ((d[i] & 255) != 255) {
+                alpha = true;
+                break;
+            }
+        t.fmt = alpha ? "DXT3" : "DXT1";
+        int bs = blockSize(t.fmt), bw = Math.max(1, (t.w + 3) / 4), bh = Math.max(1, (t.h + 3) / 4);
+        byte[] out = new byte[bw * bh * bs];
+        double[][] cols = new double[16][];
+        for (int by = 0; by < bh; by++) {
+            for (int bx = 0; bx < bw; bx++) {
+                int at = (by * bw + bx) * bs;
+                for (int py = 0; py < 4; py++) {
+                    int row = 0;
+                    for (int px = 0; px < 4; px++) {
+                        int x = Math.min(bx * 4 + px, t.w - 1), y = Math.min(by * 4 + py, t.h - 1);
+                        int s = (y * t.w + x) * 4;
+                        int a = d[s + 3] & 255;
+                        cols[py * 4 + px] = new double[] {d[s + 2] & 255, d[s + 1] & 255, d[s] & 255, alpha ? (a >= 128 ? 4 : 0) : 4};
+                        row |= (a >> 4) << (px * 4);
+                    }
+                    if (alpha) put16(out, at + py * 2, row);
+                }
+                if (alpha) for (double[] c : cols) c[3] = 4;
+                packBlock(out, at + bs - 8, cols, bs);
+            }
+        }
+        t.px = out;
     }
 
     private static void shrinkTextures(List<Texture> tex, int limit, Consumer<String> log) {
@@ -1839,30 +2163,39 @@ final class CarConverter {
             if (c[0] == 0x33310003) table = c;
         Map<String, byte[]> tpl = new HashMap<>();
         if (table != null) {
-            for (int i = 0; i + 24 <= table[1] && tpl.size() < 2; i += 24) {
+            for (int i = 0; i + 24 <= table[1] && tpl.size() < 4; i += 24) {
                 int off = i32(xt, table[2] + i + 4), cs = i32(xt, table[2] + i + 8);
                 if (!isJdlz(xt, off)) continue;
                 byte[] d = jdlzDecode(sub(xt, off, off + cs));
                 byte[] rec = sub(d, Math.max(0, d.length - 172), d.length);
                 if (!tpl.containsKey("DXT1") && find(rec, ints(0x302, 0x303, 0x0C), 0) >= 0) tpl.put("DXT1", rec);
                 if (!tpl.containsKey("DXT3") && find(rec, ints(0x302, 0x303, 0x0E), 0) >= 0) tpl.put("DXT3", rec);
+                if (rec.length > 0x3E && find(rec, ints(0x302, 0x303, NV2A_P8), 0) >= 0) {
+                    int kind = rec[0x3E] & 255;
+                    if (kind == VINYL_KIND) tpl.putIfAbsent(PALETTED, rec);
+                    else if (kind == MASK_KIND) tpl.putIfAbsent(PALETTED_MASK, rec);
+                }
             }
         }
-        if (tpl.size() < 2) throw new Failure(Failure.Reason.UNSUPPORTED, "no Xbox texture record to copy from");
+        if (tpl.isEmpty()) throw new Failure(Failure.Reason.UNSUPPORTED, "no Xbox texture record to copy from");
         // DXT5 is the DXT3 record with the NV2A's own format for it
-        byte[] five = tpl.get("DXT3").clone();
-        put32(five, find(five, ints(0x302, 0x303, 0x0E), 0) + 8, 0x0F);
-        tpl.put("DXT5", five);
+        if (tpl.containsKey("DXT3")) {
+            byte[] five = tpl.get("DXT3").clone();
+            put32(five, find(five, ints(0x302, 0x303, 0x0E), 0) + 8, 0x0F);
+            tpl.put("DXT5", five);
+        }
         return tpl;
     }
 
     private static byte[] buildTextures(List<Texture> tex, byte[] xt, String car) throws Failure {
-        Map<String, byte[]> tpl = templateRecords(xt);
+        return buildPack(tex, xt, xt, "Global\\Pipeline\\CarTemplateTextures_" + car + ".tpk");
+    }
+
+    private static byte[] buildPack(List<Texture> tex, byte[] xt, byte[] records, String path) throws Failure {
+        Map<String, byte[]> tpl = templateRecords(records);
         int[] ci = first(xt, 0x33310001), ch = first(xt, 0x33320001);
         if (ci == null || ch == null) throw new Failure(Failure.Reason.UNSUPPORTED, "the game's texture pack has no head");
         byte[] tInfo = sub(xt, ci[2], ci[2] + ci[1]), tHead = sub(xt, ch[2], ch[2] + ch[1]);
-        // the pack's name, its hash in both places
-        String path = "Global\\Pipeline\\CarTemplateTextures_" + car + ".tpk";
         byte[] nameBytes = Arrays.copyOf(latin(path), 0x40);
         System.arraycopy(nameBytes, 0, tInfo, 0x20, 0x40);
         put32(tInfo, 0x60, bhash(path));
@@ -1873,25 +2206,29 @@ final class CarConverter {
         Buf hashes = new Buf();
         int offset = 0;
         for (Texture t : sorted) {
-            byte[] rec = tpl.get(t.fmt).clone();
+            byte[] template = tpl.get(t.fmt);
+            if (template == null) throw new Failure(Failure.Reason.UNSUPPORTED, "no Xbox record for a " + t.fmt + " texture");
+            byte[] rec = template.clone();
             byte[] nm = latin(t.name);
             Arrays.fill(rec, 0, 24, (byte) 0);
             System.arraycopy(nm, 0, rec, 0, Math.min(nm.length, 23));
             put32(rec, 24, t.hash);
             int n = t.px.length;
+            byte[] palette = t.palette != null ? t.palette : new byte[0];
             put32(rec, 24 + 0xC, offset);
             put32(rec, 24 + 0x10, offset + n);
             put32(rec, 24 + 0x14, n);
-            put32(rec, 24 + 0x18, 0);
+            put32(rec, 24 + 0x18, palette.length);
             put32(rec, 24 + 0x1C, n);
             put16(rec, 24 + 0x20, t.w);
             put16(rec, 24 + 0x22, t.h);
             rec[24 + 0x24] = (byte) ilog2(t.w);
             rec[24 + 0x25] = (byte) ilog2(t.h);
-            int pad = Math.floorMod(8 - (n + rec.length), 16);
-            blocks.add(cat(t.px, new byte[pad], rec));
+            if (t.look != null) System.arraycopy(t.look, 0, rec, 24 + LOOK, LOOK_SIZE);
+            int pad = Math.floorMod(8 - (n + palette.length + rec.length), 16);
+            blocks.add(cat(t.px, palette, new byte[pad], rec));
             hashes.add(ints(t.hash, 0));
-            offset = align(offset + n, 0x80);
+            offset = align(offset + n + palette.length, 0x80);
         }
         // the table's offsets count from the file's start, so the head is laid out first; its size does not depend on them
         byte[][] sized = textureHead(tInfo, tHead, hashes.bytes(), new byte[sorted.size() * 24]);
@@ -2151,9 +2488,55 @@ final class CarConverter {
             return base + align(8, al) + index * el;
         }
 
+        String resize(String cls, String node, String field, int size) {
+            int c = attribKey(cls), fk = attribKey(field);
+            int[] d = classes.get(c).fields.get(fk);
+            if (d == null) return "no such field";
+            if ((d[4] & 1) == 0 || size < 0 || size > 0xFFFF) return "not an array";
+            Integer alObj = aligns.get(pair(c, fk));
+            int head = align(8, alObj == null ? 4 : alObj);
+            int at = colls.get(pair(c, attribKey(node)));
+            int[] fix = null;
+            int base;
+            if ((d[4] & 2) != 0) {
+                int[] f = allFix(at + 0x1C);
+                if (f == null) return "not in this node";
+                base = f[3] + d[1];
+            } else {
+                byte[] h = read(at + 20, 8);
+                int ne = i32(h, 0), nt = i32(h, 4) & 0xFFFF, ents = at + 32 + nt * 4;
+                for (int e = 0; e < ne && fix == null; e++) {
+                    byte[] ent = read(ents + e * 12, 12);
+                    if (i32(ent, 0) == fk && (u16(ent, 10) & 0x20) == 0) fix = allFix(ents + e * 12 + 4);
+                }
+                if (fix == null) return "not in this node";
+                base = fix[3];
+            }
+            int count = u16(bin.a, base), cap = u16(bin.a, base + 2), el = u16(bin.a, base + 4);
+            if (size <= cap) {
+                put16(bin.a, base, size);
+                return null;
+            }
+            if (fix == null) return "room for " + cap;
+            for (int q = base; q < base + head + cap * el; q += 4)
+                if (binFix.containsKey(q)) return "pointers in the array";
+            int moved = align(bin.n, 16);
+            bin.zeros(moved - bin.n);
+            byte[] array = new byte[head + size * el];
+            System.arraycopy(bin.a, base, array, 0, head + Math.min(count, cap) * el);
+            put16(array, 0, size);
+            put16(array, 2, size);
+            bin.add(array);
+            fix[3] = moved;
+            return null;
+        }
+
         // null, or why not
         String setValue(String cls, String node, String field, int index, String member, String text) {
             Place p = fieldPlace(cls, node, field, index);
+            if (p.def != null && p.bin < 0 && p.inline < 0 && (p.def[4] & 1) != 0 && !zero(text)
+                    && resize(cls, node, field, index + 1) == null)
+                p = fieldPlace(cls, node, field, index);
             if (p.def == null) return "no such field";
             if (p.bin < 0 && p.inline < 0) return "not in this node";
             int at = 0;
@@ -2289,6 +2672,14 @@ final class CarConverter {
         for (int i = 0; i < names.length; i++) MEMBERS.put(names[i], at[i]);
     }
 
+    private static boolean zero(String text) {
+        try {
+            return Double.parseDouble(text) == 0;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
     private static byte[] packFloat(String text) {
         try {
             return ints(Float.floatToRawIntBits((float) Double.parseDouble(text)));
@@ -2342,6 +2733,14 @@ final class CarConverter {
                 if (v.has(cls, w[4])) continue;  // another add-on's script made it: names are the mods' to clash
                 v.cloneNode(cls, w[2], w[4], w[3]);
                 done++;
+            } else if (op.equals("add_node") && w.length >= 4) {
+                if (v.has(cls, w[3])) continue;
+                if (!v.has(cls, w[2])) {
+                    skipped.merge("add " + cls + " " + w[3] + ": parent missing", 1, Integer::sum);
+                    continue;
+                }
+                v.cloneNode(cls, w[2], w[3], w[2]);
+                done++;
             } else if (op.equals("update_field") && w.length >= 5) {
                 String node = w[2];
                 Matcher m = FIELD.matcher(w[3]);
@@ -2359,6 +2758,15 @@ final class CarConverter {
                 }
                 String why = v.setValue(cls, node, name, index, member, text);
                 if (why != null) skipped.merge(cls + "." + name + ": " + why, 1, Integer::sum);
+                else done++;
+            } else if (op.equals("resize_field") && w.length > 4 && v.has(cls, w[2])) {
+                String why;
+                try {
+                    why = v.resize(cls, w[2], w[3], Integer.parseInt(w[4]));
+                } catch (NumberFormatException e) {
+                    why = "size " + w[4];
+                }
+                if (why != null) skipped.merge("resize " + cls + "." + w[3] + ": " + why, 1, Integer::sum);
                 else done++;
             } else if ((op.equals("add_field") || op.equals("resize_field")) && w.length > 3) {
                 skipped.merge(op + " " + cls + "." + w[3], 1, Integer::sum);
@@ -2423,7 +2831,15 @@ final class CarConverter {
         int end = o + s;
         for (Kept car : cars) {
             int fillN = Math.floorMod(16 - (end + added.n + 8) % 16, 16);
-            byte[] body = cat(fill(fillN, 0x11), item);
+            byte[] own = null;
+            if (car.collision != null) {
+                try {
+                    own = BinaryCollection.collision(car.collision, attribKey(car.car));
+                } catch (BinaryCollection.Malformed e) {
+                    log.accept(car.car + ": collision, " + e.getMessage());
+                }
+            }
+            byte[] body = cat(fill(fillN, 0x11), own != null ? own : item);
             put32(body, fillN, attribKey(car.car));
             int grow = align(8 + body.length, 0x80);
             added.add(ints(cid, grow - 8)).add(body).zeros(grow - 8 - body.length);
@@ -2442,23 +2858,66 @@ final class CarConverter {
         for (int i = 0; i < rows; i++)
             if ((g[parts[2] + i * 14 + 7] & 255) == template) run.add(g, parts[2] + i * 14, 14);
         byte[] one = run.bytes();
-        hideExtraParts(g, sub, one, log);
+        boolean templated = false;
+        for (Kept k : cars) templated |= k.parts == null;
+        hideExtraParts(g, sub, one, templated ? log : x -> {});
+        PartTables add = new PartTables(g, sub);
         Buf newRows = new Buf(), newHashes = new Buf();
         for (int i = 0; i < cars.size(); i++) {
-            byte[] mine = one.clone();
-            for (int r = 0; r < mine.length; r += 14) mine[r + 7] = (byte) (carCount + i);
-            newRows.add(mine);
-            newHashes.add(ints(bhash(cars.get(i).car)));
+            Kept car = cars.get(i);
+            BinaryCollection.Model model = null;
+            if (car.parts != null) {
+                try {
+                    model = BinaryCollection.model(car.parts);
+                } catch (BinaryCollection.Malformed e) {
+                    log.accept(car.car + ": parts, " + e.getMessage());
+                }
+            }
+            if (model != null && !model.parts.isEmpty()) {
+                for (BinaryCollection.Part p : model.parts) {
+                    if (p.slot == VINYL_PART) vinylColours(p);
+                    newRows.add(add.row(p, carCount + i));
+                }
+                log.accept(car.car + ": " + model.parts.size() + " parts of its own");
+            } else {
+                byte[] mine = one.clone();
+                for (int r = 0; r < mine.length; r += 14) mine[r + 7] = (byte) (carCount + i);
+                newRows.add(mine);
+            }
+            newHashes.add(ints(bhash(car.car)));
         }
-        int grown = newRows.n + newHashes.n, pad = align(grown, 0x80) - grown;
-        newRows.zeros(pad);
+        add.check();
+        byte[] strAdd = add.strings.bytes(), offAdd = add.offsets.bytes(), attrAdd = add.attributes.bytes(), structAdd = add.structs.bytes();
+        int newRowCount = rows + newRows.n / 14;
+        int grown = newRows.n + newHashes.n + strAdd.length + offAdd.length + attrAdd.length + structAdd.length;
+        newRows.zeros(align(grown, 0x80) - grown);
+        int partsGrown = newRows.n + newHashes.n + strAdd.length + offAdd.length + attrAdd.length + structAdd.length;
+        int[] strs = sub.get(0x34606), offs = sub.get(0x3460C), attrs = sub.get(0x34605), structs = sub.get(0x3460A);
         g = insert(g, parts[2] + rows * 14, newRows.bytes());
         put32(g, parts[2] - 4, parts[1] + newRows.n);
         g = insert(g, tab[2] + tab[1], newHashes.bytes());
         put32(g, tab[2] - 4, tab[1] + newHashes.n);
-        put32(g, partsChunk[2] - 4, partsChunk[1] + newRows.n + newHashes.n);
+        if (structAdd.length > 0) {
+            g = insert(g, structs[2] + add.structCount * 24, structAdd);
+            put32(g, structs[2] - 4, structs[1] + structAdd.length);
+        }
+        if (attrAdd.length > 0) {
+            g = insert(g, attrs[2] + add.attributeCount * 8, attrAdd);
+            put32(g, attrs[2] - 4, attrs[1] + attrAdd.length);
+        }
+        if (offAdd.length > 0) {
+            g = insert(g, offs[2] + offs[1], offAdd);
+            put32(g, offs[2] - 4, offs[1] + offAdd.length);
+        }
+        if (strAdd.length > 0) {
+            g = insert(g, strs[2] + strs[1], strAdd);
+            put32(g, strs[2] - 4, strs[1] + strAdd.length);
+        }
+        put32(g, partsChunk[2] - 4, partsChunk[1] + partsGrown);
+        put32(g, head[2] + 0x20, add.attributeCount + attrAdd.length / 8);
         put32(g, head[2] + 0x28, carCount + cars.size());
-        put32(g, head[2] + 0x38, rows + cars.size() * (one.length / 14));
+        put32(g, head[2] + 0x30, add.structCount + structAdd.length / 24);
+        put32(g, head[2] + 0x38, newRowCount);
 
         // the car types: an empty one for 84, the "no car" answer, then the add-ons
         int rowsAt = types[2] + 8;
@@ -2469,6 +2928,14 @@ final class CarConverter {
         newTypes.add(none);
         for (int i = 0; i < cars.size(); i++) {
             Kept car = cars.get(i);
+            if (car.carType != null) {
+                try {
+                    newTypes.add(BinaryCollection.carType(car.carType, car.car, FIRST_ADDON_TYPE + i));
+                    continue;
+                } catch (BinaryCollection.Malformed e) {
+                    log.accept(car.car + ": car type, " + e.getMessage());
+                }
+            }
             byte[] r = rec.clone();
             System.arraycopy(Arrays.copyOf(latin(car.car), 16), 0, r, 0, 16);
             System.arraycopy(Arrays.copyOf(latin(car.car), 16), 0, r, 0x10, 16);
@@ -2482,6 +2949,120 @@ final class CarConverter {
         g = insert(g, types[2] + types[1], newTypes.bytes());
         put32(g, types[2] - 4, types[1] + newTypes.n);
         return g;
+    }
+
+    private static final class PartTables {
+        final Buf strings = new Buf(), offsets = new Buf(), attributes = new Buf(), structs = new Buf();
+        final int stringBase, offsetBase, attributeCount, structCount;
+        private final Map<String, Integer> stringAt = new HashMap<>();
+        private final Map<Long, Integer> attributeAt = new HashMap<>();
+        private final Map<String, Integer> listAt = new HashMap<>();
+        private final Map<String, Integer> structAt = new HashMap<>();
+        private int nextAttribute, nextStruct;
+
+        PartTables(byte[] g, Map<Integer, int[]> sub) throws Failure {
+            int[] head = sub.get(0x34603), strs = sub.get(0x34606), offs = sub.get(0x3460C);
+            if (strs == null || offs == null || !sub.containsKey(0x34605) || !sub.containsKey(0x3460A))
+                throw new Failure(Failure.Reason.UNSUPPORTED, "not the game's parts tables");
+            stringBase = strs[1];
+            offsetBase = offs[1];
+            attributeCount = i32(g, head[2] + 0x20);
+            structCount = i32(g, head[2] + 0x30);
+            if (stringBase % 4 != 0 || offsetBase % 2 != 0 || attributeCount * 8 > sub.get(0x34605)[1]
+                    || structCount * 24 > sub.get(0x3460A)[1])
+                throw new Failure(Failure.Reason.UNSUPPORTED, "the parts tables' layout");
+            nextAttribute = attributeCount;
+            nextStruct = structCount;
+        }
+
+        int string(String s) {
+            if (s == null) return -1;
+            Integer at = stringAt.get(s);
+            if (at != null) return at;
+            int index = (stringBase + strings.n) >> 2;
+            byte[] b = latin(s);
+            strings.add(b).zeros(1);
+            strings.zeros(align(strings.n, 4) - strings.n);
+            stringAt.put(s, index);
+            return index;
+        }
+
+        int attribute(BinaryCollection.Attribute a) {
+            int value;
+            switch (a.kind) {
+                case BinaryCollection.STRING:
+                    value = a.text == null ? -1 : string(a.text);
+                    break;
+                case BinaryCollection.TWO_STRING:
+                    value = (a.text == null ? 0xFFFF : string(a.text) & 0xFFFF) | (a.text2 == null ? 0xFFFF : string(a.text2) & 0xFFFF) << 16;
+                    break;
+                default:
+                    value = a.value;
+            }
+            long key = (a.key & 0xFFFFFFFFL) << 32 | (value & 0xFFFFFFFFL);
+            Integer at = attributeAt.get(key);
+            if (at != null) return at;
+            attributes.add(ints(a.key, value));
+            attributeAt.put(key, nextAttribute);
+            return nextAttribute++;
+        }
+
+        int list(List<BinaryCollection.Attribute> attrs) {
+            if (attrs.isEmpty()) return 0xFFFF;
+            int[] idx = new int[attrs.size()];
+            StringBuilder key = new StringBuilder();
+            for (int i = 0; i < idx.length; i++) {
+                idx[i] = attribute(attrs.get(i));
+                key.append(idx[i]).append(',');
+            }
+            Integer at = listAt.get(key.toString());
+            if (at != null) return at;
+            int unit = (offsetBase + offsets.n) / 2;
+            byte[] b = new byte[2 + idx.length * 2];
+            put16(b, 0, idx.length);
+            for (int i = 0; i < idx.length; i++) put16(b, 2 + i * 2, idx[i]);
+            offsets.add(b);
+            listAt.put(key.toString(), unit);
+            return unit;
+        }
+
+        int struct(BinaryCollection.Lod l) {
+            if (l == null) return 0xFFFF;
+            byte[] b = new byte[24];
+            if (l.templated) {
+                put16(b, 0, 1);
+                put16(b, 2, l.concatenator == null ? 0xFFFF : string(l.concatenator));
+                for (int k = 0; k < 5; k++) put32(b, 4 + k * 4, l.names[k] == null ? -1 : string(l.names[k]));
+            } else {
+                put32(b, 0, 0xFFFF0000);
+                for (int k = 0; k < 5; k++) put32(b, 4 + k * 4, l.names[k] == null ? -1 : bhash(l.names[k]));
+            }
+            String key = new BigInteger(1, b).toString(16);
+            Integer at = structAt.get(key);
+            if (at != null) return at;
+            structs.add(b);
+            structAt.put(key, nextStruct);
+            return nextStruct++;
+        }
+
+        byte[] row(BinaryCollection.Part p, int carIndex) {
+            byte[] r = new byte[14];
+            put32(r, 0, bhash(p.label));
+            r[4] = (byte) p.slot;
+            put16(r, 5, p.upgrade);
+            r[7] = (byte) carIndex;
+            put16(r, 8, p.debugName == null ? 0xFFFF : string(p.debugName));
+            put16(r, 0xA, list(p.attributes));
+            put16(r, 0xC, struct(p.lod));
+            return r;
+        }
+
+        void check() throws Failure {
+            if (((stringBase + strings.n) >> 2) > 0xFFFF || nextAttribute > 0xFFFF || (offsetBase + offsets.n) / 2 > 0xFFFF
+                    || nextStruct > 0xFFFF)
+                throw new Failure(Failure.Reason.UNSUPPORTED, "too many parts for the game's tables");
+            offsets.zeros(align(offsets.n, 4) - offsets.n);
+        }
     }
 
     private static final Pattern EXTRA_PART = Pattern.compile("_KIT0[1-9]|_STYLE\\d\\d");
@@ -2626,8 +3207,10 @@ final class CarConverter {
         Matcher binary = BINARY_ROOT.matcher(geoPath);
         Matcher geo = geoMatch(geoPath);
         String root = binary.matches() ? binary.group(1) : geo == null || geo.group(1) == null ? "" : geo.group(1);
+        List<String> cars = carPaths(files.keySet());
+        if (cars.size() == 1) root = "";
         List<String> folders = new ArrayList<>();
-        for (String other : carPaths(files.keySet()))
+        for (String other : cars)
             if (!other.equals(geoPath)) folders.add(other.substring(0, other.length() - "GEOMETRY.BIN".length()));
         Map<String, byte[]> out = new HashMap<>();
         for (Map.Entry<String, File> e : files.entrySet()) {
@@ -2657,7 +3240,23 @@ final class CarConverter {
 
     // mod: one car's files by their paths in the archive, with / in them (carFiles)
     static Package convert(Disc disc, Map<String, byte[]> mod, String geoPath, int maxTexturesKb, Consumer<String> log) throws Failure, IOException {
+        return convert(disc, mod, geoPath, maxTexturesKb, null, log);
+    }
+
+    static Package convert(Disc disc, Map<String, byte[]> mod, String geoPath, int maxTexturesKb, BinaryScript.Chooser chooser,
+                           Consumer<String> log) throws Failure, IOException {
         String car = carName(geoPath);
+        BinaryScript.Result installer = BinaryScript.run(mod, disc::has, chooser, log);
+        byte[] ownParts = collection(mod, installer, "dbmodelparts", BinaryCollection.DB_MODEL_PARTS, car);
+        if (ownParts != null) {
+            try {
+                BinaryCollection.Model model = BinaryCollection.model(ownParts);
+                log.accept("parts: the mod's own " + model.parts.size());
+            } catch (BinaryCollection.Malformed e) {
+                log.accept("parts: the mod's are unreadable, " + e.getMessage());
+                ownParts = null;
+            }
+        }
         if (car.length() > 15 || ("CARS\\" + car + "\\GEOMETRY.BIN").length() > 31)
             throw new Failure(Failure.Reason.NAME_TOO_LONG, car);
         if (car.equals(TEMPLATE_PARTS)) throw new Failure(Failure.Reason.UNSUPPORTED, "a car named " + car);
@@ -2678,20 +3277,46 @@ final class CarConverter {
         log.accept("geometry: " + solids.size() + " solids");
         // thinned first, each attachment alone, so the body they go into stays under a solid's vertex count
         reduceLods(solids, log);
-        mergeAttachments(solids, log);
-        pack.geometry = buildGeometry(solids, disc.load("CARS\\GALLARDO\\GEOMETRY.BIN"));
-
+        if (ownParts == null) mergeAttachments(solids, log);
         List<Texture> tex = readModTextures(mt);
+        updateTextures(tex, installer.textureUpdates, log);
+        remapTextures(solids, tex, car, log);
+        pack.geometry = buildGeometry(solids, disc.load("CARS\\GALLARDO\\GEOMETRY.BIN"));
+        pack.parts = ownParts;
+
         shrinkTextures(tex, maxTexturesKb * 1024, log);
         pack.textures = buildTextures(tex, disc.load("CARS\\GALLARDO\\TEXTURES.BIN"), car);
 
         pack.manufacturer = "LAMBORGHINI";
-        String ci = findFile(mod, "cartypeinfo[^/]*\\.bin");
-        if (ci != null) {
+        pack.carType = collection(mod, installer, "cartypeinfos", BinaryCollection.CAR_TYPE_INFOS, car);
+        String ci = pack.carType != null ? null : findFile(mod, "cartypeinfo[^/]*\\.bin");
+        if (pack.carType != null) {
+            String make = BinaryCollection.make(pack.carType);
+            if (make != null && !make.isEmpty()) pack.manufacturer = make;
+        } else if (ci != null) {
             byte[] raw = mod.get(ci);
             Matcher m = Pattern.compile(Pattern.quote(car) + "\0([A-Z0-9 ]+)\0").matcher(latin(raw, 0, raw.length));
             if (m.find()) pack.manufacturer = m.group(1);
         }
+        pack.collision = collection(mod, installer, "collisions", BinaryCollection.COLLISIONS, car);
+        if (pack.collision != null) {
+            try {
+                BinaryCollection.collision(pack.collision, 0);
+            } catch (BinaryCollection.Malformed e) {
+                log.accept("collision: the mod's is unreadable, " + e.getMessage());
+                pack.collision = null;
+            }
+        }
+        if (pack.carType != null) {
+            try {
+                BinaryCollection.carType(pack.carType, car, FIRST_ADDON_TYPE);
+            } catch (BinaryCollection.Malformed e) {
+                log.accept("car type: the mod's is unreadable, " + e.getMessage());
+                pack.carType = null;
+            }
+        }
+        extras(disc, mod, installer, car, pack, log);
+        logMissingTextures(disc, solids, tex, pack, car, log);
         String script = findScript(mod, car);
         if (script != null) pack.script = mod.get(script);
         pack.title = titleCase(car);
@@ -2734,6 +3359,220 @@ final class CarConverter {
         return pack;
     }
 
+    private static final int MAX_VINYL_SIDE = 512;
+
+    private static final String[][] PC_ONLY_TEXTURES = {{"TIRE_STYLE01", "TREAD"}, {"DRIVER_PLAYER", "DRIVER_CUTOUT"}};
+
+    private static final String[] RUNTIME_TEXTURES = {
+        "HEADLIGHT_LEFT", "HEADLIGHT_RIGHT", "HEADLIGHT_GLASS_LEFT", "HEADLIGHT_GLASS_RIGHT", "BRAKELIGHT_LEFT",
+        "BRAKELIGHT_RIGHT", "BRAKELIGHT_CENTRE", "BRAKELIGHT_GLASS_LEFT", "BRAKELIGHT_GLASS_RIGHT", "BRAKELIGHT_GLASS_CENTRE",
+        "WINDOW_FRONT", "WINDOW_REAR", "WINDOW_LEFT_FRONT", "WINDOW_LEFT_REAR", "WINDOW_RIGHT_FRONT", "WINDOW_RIGHT_REAR",
+        "REAR_DEFROSTER", "CARBONFIBRE", "CARBONFIBER", "LICENSEPLATE", "LICENSE_PLATE", "SPOILER_SKIN1", "ROOF_SKIN",
+        "GLOBAL_SKIN1", "SPINNER_TEXTURE", "TREAD", "CARSHADOW"};
+
+    private static final Map<String, Integer> LOOK_FIELDS = new HashMap<>();
+    private static final Map<String, Integer> LOOK_VALUES = new HashMap<>();
+    static {
+        LOOK_FIELDS.put("RENDERINGORDER", 0);
+        LOOK_FIELDS.put("APPLYALPHASORTING", 3);
+        LOOK_FIELDS.put("ALPHAUSAGETYPE", 4);
+        LOOK_FIELDS.put("ALPHABLENDTYPE", 5);
+        String[] blends = {"TEXBLEND_SRCCOPY", "TEXBLEND_BLEND", "TEXBLEND_ADDATIVE", "TEXBLEND_SUBTRACTIVE", "TEXBLEND_OVERBRIGHT"};
+        for (int i = 0; i < blends.length; i++) LOOK_VALUES.put(blends[i], i);
+        String[] usages = {"TEXUSAGE_NONE", "TEXUSAGE_PUNCHTHRU", "TEXUSAGE_MODULATED"};
+        for (int i = 0; i < usages.length; i++) LOOK_VALUES.put(usages[i], i);
+    }
+
+    private static int lookValue(String text) {
+        Integer named = LOOK_VALUES.get(text.toUpperCase(Locale.ROOT));
+        if (named != null) return named;
+        try {
+            return Integer.decode(text);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+
+    private static int nameHash(String name) {
+        if (name.matches("0[xX][0-9A-Fa-f]{1,8}")) return (int) Long.parseLong(name.substring(2), 16);
+        return bhash(name);
+    }
+
+    private static void updateTextures(List<Texture> tex, Map<String, Map<String, String>> updates, Consumer<String> log) {
+        if (updates.isEmpty()) return;
+        Map<Integer, Map<String, String>> byHash = new HashMap<>();
+        for (Map.Entry<String, Map<String, String>> e : updates.entrySet()) byHash.put(nameHash(e.getKey()), e.getValue());
+        int changed = 0;
+        for (Texture t : tex) {
+            Map<String, String> fields = byHash.get(t.hash);
+            if (fields == null) continue;
+            for (Map.Entry<String, String> f : fields.entrySet()) {
+                Integer at = LOOK_FIELDS.get(f.getKey().toUpperCase(Locale.ROOT));
+                int v = lookValue(f.getValue());
+                if (at == null || v < 0 || v > 255) continue;
+                t.look[at] = (byte) v;
+                changed++;
+            }
+        }
+        if (changed > 0) log.accept("textures: " + changed + " fields set by update_texture");
+    }
+
+    private static void tpkHashes(byte[] pack, java.util.Set<Integer> into) {
+        for (int[] c : walkAll(pack, 0, pack.length))
+            if (c[0] == 0x33310002)
+                for (int i = 0; i + 8 <= c[1]; i += 8) into.add(i32(pack, c[2] + i));
+    }
+
+    private static void logMissingTextures(Disc disc, List<Solid> solids, List<Texture> tex, Package pack, String car,
+                                           Consumer<String> log) {
+        java.util.Set<Integer> known = new HashSet<>();
+        for (Texture t : tex) known.add(t.hash);
+        for (AddedTexture t : pack.added) known.add(t.hash);
+        for (String name : RUNTIME_TEXTURES) known.add(bhash(name));
+        for (String suffix : new String[] {"_SKIN1", "_SKIN1B", "_SKIN2", "_SKIN3", "_SKIN4"}) known.add(bhash(car + suffix));
+        try {
+            tpkHashes(jdlzDecode(disc.load("GLOBAL\\GLOBALB.LZC")), known);
+            tpkHashes(disc.load("CARS\\TEXTURES.BIN"), known);
+        } catch (IOException | RuntimeException e) {
+            return;
+        }
+        Map<Integer, Integer> missing = new TreeMap<>(Integer::compareUnsigned);
+        for (Solid s : solids)
+            for (int i = 0; s.tex != null && i + 4 <= s.tex.length; i += 4) {
+                int h = i32(s.tex, i);
+                if (h != 0x11111111 && h != 0 && !known.contains(h)) missing.merge(h, 1, Integer::sum);
+            }
+        for (Map.Entry<Integer, Integer> e : missing.entrySet())
+            log.accept(String.format(Locale.ROOT, "textures: %08x is nowhere, used %d times", e.getKey(), e.getValue()));
+    }
+
+    private static void remapTextures(List<Solid> solids, List<Texture> tex, String car, Consumer<String> log) {
+        java.util.Set<Integer> own = new HashSet<>();
+        for (Texture t : tex) own.add(t.hash);
+        int remapped = 0;
+        for (String[] pair : PC_ONLY_TEXTURES) {
+            int from = bhash(pair[0]), to = bhash(pair[1].startsWith("_") ? car + pair[1] : pair[1]);
+            if (own.contains(from) || pair[1].startsWith("_") && !own.contains(to)) continue;
+            for (Solid s : solids) {
+                if (s.tex == null) continue;
+                for (int i = 0; i + 4 <= s.tex.length; i += 4)
+                    if (i32(s.tex, i) == from) {
+                        put32(s.tex, i, to);
+                        remapped++;
+                    }
+            }
+        }
+        if (remapped > 0) log.accept("textures: " + remapped + " PC-only texture uses given the car's own");
+    }
+
+    private static byte[] collection(Map<String, byte[]> mod, BinaryScript.Result script, String manager, int key, String car) {
+        String imported = script.imports.get(manager);
+        if (imported != null) {
+            byte[] d = mod.get(imported);
+            if (BinaryCollection.manager(d) == key && car.equals(BinaryCollection.name(d))) return d;
+        }
+        List<String> keys = new ArrayList<>(mod.keySet());
+        keys.sort(null);
+        for (String k : keys) {
+            if (!k.toLowerCase(Locale.ROOT).endsWith(".bin")) continue;
+            byte[] d = mod.get(k);
+            if (BinaryCollection.manager(d) == key && car.equals(BinaryCollection.name(d))) return d;
+        }
+        return null;
+    }
+
+    private static String scriptFile(BinaryScript.Result script, Map<String, byte[]> mod, Pattern target) {
+        for (Map.Entry<String, String> e : script.files.entrySet())
+            if (target.matcher(e.getKey()).matches() && mod.containsKey(e.getValue())) return e.getValue();
+        return null;
+    }
+
+    private static void extras(Disc disc, Map<String, byte[]> mod, BinaryScript.Result script, String car, Package pack,
+                               Consumer<String> log) throws Failure, IOException {
+        String q = Pattern.quote(car);
+        String ini = scriptFile(script, mod, Pattern.compile("(.*\\\\)?UNLIMITERDATA\\\\" + q + "\\.INI"));
+        if (ini == null) ini = findFile(mod, "unlimiterdata/" + q + "\\.ini");
+        if (ini != null) {
+            pack.unlimiter = mod.get(ini);
+            log.accept("unlimiter: " + ini);
+        }
+        String vinyls = scriptFile(script, mod, Pattern.compile("CARS\\\\" + q + "\\\\VINYLS\\.BIN"));
+        if (vinyls == null) vinyls = findFile(mod, q + "/vinyls\\.bin");
+        if (vinyls != null) {
+            try {
+                List<Texture> tex = readModVinyls(mod.get(vinyls), MAX_VINYL_SIDE);
+                log.accept("vinyls: " + tex.size() + " paletted at up to " + MAX_VINYL_SIDE);
+                if (!tex.isEmpty()) {
+                    byte[] stock = disc.load("CARS\\GALLARDO\\VINYLS.BIN");
+                    pack.vinyls = buildPack(tex, stock, stock, "Vehicles\\Cars\\MW\\" + car + "\\" + car + "_vinyls.tpk");
+                }
+            } catch (Failure e) {
+                log.accept("vinyls: " + e.getMessage());
+            }
+        }
+        for (Map.Entry<String, Map<Integer, String>> e : script.strings.entrySet())
+            pack.strings.computeIfAbsent(e.getKey(), x -> new LinkedHashMap<>()).putAll(e.getValue());
+        java.util.Set<Integer> seen = new java.util.HashSet<>();
+        for (String folder : script.textureFolders) {
+            String prefix = folder.toLowerCase(Locale.ROOT) + "/";
+            List<String> keys = new ArrayList<>(mod.keySet());
+            keys.sort(null);
+            for (String k : keys) {
+                String l = k.toLowerCase(Locale.ROOT);
+                if (!l.startsWith(prefix) || !l.endsWith(".dds")) continue;
+                String name = k.substring(k.lastIndexOf('/') + 1, k.length() - 4).toUpperCase(Locale.ROOT);
+                AddedTexture t = ddsTexture(mod.get(k), bhash(name));
+                if (t != null && seen.add(t.hash)) pack.added.add(t);
+            }
+        }
+        if (!pack.added.isEmpty()) log.accept("textures: " + pack.added.size() + " for the front end and the game's packs");
+    }
+
+    static AddedTexture ddsTexture(byte[] d, int hash) {
+        if (d == null || d.length < 128 || i32(d, 0) != 0x20534444) return null;
+        int h = i32(d, 12), w = i32(d, 16), pf = i32(d, 80), fourcc = i32(d, 84), bits = i32(d, 88);
+        if (w <= 0 || h <= 0 || w > 4096 || h > 4096 || Integer.bitCount(w) != 1 || Integer.bitCount(h) != 1) return null;
+        AddedTexture t = new AddedTexture();
+        t.hash = hash;
+        t.width = w;
+        t.height = h;
+        if ((pf & 4) != 0) {
+            String fmt = latin(d, 84, 4);
+            t.format = xboxFormat(fmt);
+            if (t.format < 0) return null;
+            int n = Math.max(1, (w + 3) / 4) * Math.max(1, (h + 3) / 4) * blockSize(fmt);
+            if (128 + n > d.length) return null;
+            t.data = sub(d, 128, 128 + n);
+            return t;
+        }
+        if ((pf & 0x40) == 0 || bits != 32 || 128 + w * h * 4 > d.length) return null;
+        boolean alpha = (pf & 1) != 0, rgbaOrder = i32(d, 92) == 0xFF;
+        t.format = 0x06;
+        t.data = new byte[w * h * 4];
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int src = 128 + (y * w + x) * 4;
+                int b0 = d[src] & 255, b1 = d[src + 1] & 255, b2 = d[src + 2] & 255, a = alpha ? d[src + 3] & 255 : 255;
+                int r = rgbaOrder ? b0 : b2, g = b1, b = rgbaOrder ? b2 : b0;
+                int at = swizzle(x, y, w, h) * 4;
+                t.data[at] = (byte) b;
+                t.data[at + 1] = (byte) g;
+                t.data[at + 2] = (byte) r;
+                t.data[at + 3] = (byte) a;
+            }
+        }
+        return t;
+    }
+
+    static int swizzle(int x, int y, int w, int h) {
+        int out = 0, bit = 0;
+        for (int mask = 1; mask < w || mask < h; mask <<= 1) {
+            if (mask < w) out |= ((x & mask) != 0 ? 1 : 0) << bit++;
+            if (mask < h) out |= ((y & mask) != 0 ? 1 : 0) << bit++;
+        }
+        return out;
+    }
+
     static boolean isStockCar(Disc disc, String car) throws Failure, IOException {
         return carNames(jdlzDecode(disc.load("GLOBAL\\GLOBALB.LZC"))).contains(car);
     }
@@ -2764,8 +3603,9 @@ final class CarConverter {
         return String.format("name_%08x.dxt", bhash("SECONDARY_LOGO_" + car));
     }
 
-    // all the kept cars as the game's files. The archive goes straight to dir, as NFS_ZZDATAn.BIN: it may be large
-    static Built build(Disc disc, List<Kept> kept, File dir, Consumer<String> log) throws Failure, IOException {
+    // all the kept cars as the game's files. The archive goes straight to dir, as NFS_ZZDATAn.BIN: it may be large.
+    // unlimiterVault is the Unlimiter's VltEd part (UnlimiterImport.vault), applied before the cars' scripts as on the PC
+    static Built build(Disc disc, List<Kept> kept, File dir, byte[] unlimiterVault, Consumer<String> log) throws Failure, IOException {
         Built built = new Built();
         byte[] g = jdlzDecode(disc.load("GLOBAL\\GLOBALB.LZC"));
         List<String> stock = carNames(g);
@@ -2793,7 +3633,8 @@ final class CarConverter {
             Vault fe = new Vault(disc.load("GLOBAL\\FE_ATTRIB.BIN"));
             fe.classes = v.classes;
             fe.typeNames = v.typeNames;
-            StringBuilder list = new StringBuilder();
+            StringBuilder list = new StringBuilder(), makes = new StringBuilder();
+            if (unlimiterVault != null) applyScript(v, fe, unlimiterVault, log);
             for (Kept k : addons) {
                 String node = k.car.toLowerCase(Locale.ROOT);
                 if (k.script != null) applyScript(v, fe, k.script, log);
@@ -2813,8 +3654,12 @@ final class CarConverter {
                 v.setModel(node, k.car);
                 fe.setLayoutText("frontend", node, 0x18, k.car);  // the name in CARNAME_%s_%s (0x140CC1)
                 String make = fe.setMake(node, k.manufacturer);
-                alias.put("CARS\\" + k.car + "\\VINYLS.BIN", "CARS\\GALLARDO\\VINYLS.BIN");
+                if (k.vinyls != null && k.vinyls.isFile()) files.put("CARS\\" + k.car + "\\VINYLS.BIN", k.vinyls);
+                else alias.put("CARS\\" + k.car + "\\VINYLS.BIN", "CARS\\GALLARDO\\VINYLS.BIN");
                 alias.put("CARS\\" + k.car + "\\PREVINYL.BIN", "CARS\\GALLARDO\\PREVINYL.BIN");
+                String ownMake = k.manufacturer.toUpperCase(Locale.ROOT).replace(' ', '_');
+                makes.append(String.format("%08x %s %s\n", attribKey(node), ownMake, k.car));
+                k.strings.computeIfAbsent("english", x -> new LinkedHashMap<>()).putIfAbsent(bhash("CARNAME_" + ownMake + "_" + k.car), k.title);
                 // for src/game/car_mods.cpp: the profile's list and the car's name
                 String logoInfo = "0 0 0 0";
                 if (k.logo != null) {
@@ -2839,8 +3684,35 @@ final class CarConverter {
             files = first;
             built.files.put("cars.txt", latin(list.toString()));
             built.files.put("car_types.txt", latin((FIRST_ADDON_TYPE + addons.size()) + "\n"));
+            built.files.put("makes.txt", latin(makes.toString()));
         }
+        extrasFiles(kept, built);
         buildZdir(disc, files, alias, dir, built);
         return built;
+    }
+
+    static final String UNLIMITER_CARS = "unlimiter/cars/", ADDED_LIST = "addtex.txt", ADDED_DIR = "addtex/", STRINGS_DIR = "strings/";
+
+    private static void extrasFiles(List<Kept> kept, Built built) {
+        Map<String, Map<Integer, String>> strings = new TreeMap<>();
+        StringBuilder textures = new StringBuilder();
+        java.util.Set<Integer> seen = new java.util.HashSet<>();
+        for (Kept k : kept) {
+            if (k.unlimiter != null) built.files.put(UNLIMITER_CARS + k.car + ".ini", k.unlimiter);
+            for (Map.Entry<String, Map<Integer, String>> e : k.strings.entrySet())
+                strings.computeIfAbsent(e.getKey(), x -> new LinkedHashMap<>()).putAll(e.getValue());
+            for (AddedTexture t : k.added) {
+                if (!seen.add(t.hash)) continue;
+                built.files.put(String.format("%s%08x.dxt", ADDED_DIR, t.hash), t.data);
+                textures.append(String.format("%08x %d %d %d\n", t.hash, t.width, t.height, t.format));
+            }
+        }
+        for (Map.Entry<String, Map<Integer, String>> e : strings.entrySet()) {
+            StringBuilder s = new StringBuilder();
+            for (Map.Entry<Integer, String> line : e.getValue().entrySet())
+                s.append(String.format("%08x %s\n", line.getKey(), line.getValue().replace('\n', ' ')));
+            built.files.put(STRINGS_DIR + e.getKey() + ".txt", s.toString().getBytes(StandardCharsets.UTF_8));
+        }
+        if (textures.length() > 0) built.files.put(ADDED_LIST, latin(textures.toString()));
     }
 }

@@ -31,6 +31,7 @@
 #include "common/aspect.h"
 #include "common/menu.h"
 #include "common/options.h"
+#include "common/presets.h"
 #include "common/translations.h"
 #include "core/input.h"
 #include "core/log.h"
@@ -534,6 +535,8 @@ int main(int, char**) {
     if (app::kGame.window) app::kGame.window(g_window);
     std::filesystem::path hdd = app::ExeDir() / "hdd";
     LOGR("app: saves in %s", hdd.c_str());
+    presets::SetDir(hdd / "unlimiter");
+    presets::SetSaves(hdd / "E" / "UDATA" / "4541007b");
     if (!kernel::Boot(std::move(game.xbe), IMAGE_XBE, game.dir.string(), hdd.string())) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, Utf8(app::kGame.short_title).c_str(),
                                  app::Ui("The game failed to start, see the log in the logs folder.", false).c_str(),

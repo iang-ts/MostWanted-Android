@@ -1113,6 +1113,11 @@ X86_FUNC(sub_000C5900) {
         ctx.esp += 4;
         return;
     }
+    if (uint32_t added = game::AddedTexture(ctx, hash)) {
+        ctx.eax = added;
+        ctx.esp += 4;
+        return;
+    }
     uint32_t page = hash - kIconHashes;
     if (page >= uint32_t(kIconCount)) {
         __imp__sub_000C5900(ctx, base);
@@ -1165,9 +1170,14 @@ X86_FUNC(sub_00128AB0) {
 
 // the scroller's add (option), thiscall: ANDROID OPTIONS' UIOptionsMain takes none of the game's icons, deleted as they
 // come. Ours are told by their vtable: a game's icon can be new where one of ours was freed
+namespace unlimiter {
+void NoteOption(uint32_t screen, uint32_t option);
+}
+
 X86_EXTERN_FUNC(__imp__sub_0012A120);
 X86_FUNC(sub_0012A120) {
     uint32_t from = kernel::R32(ctx.esp), option = kernel::R32(ctx.esp + 4);
+    unlimiter::NoteOption(ctx.ecx, option);
     if (!g_android_next || from <= kSetupFirst || from > kSetupLast || !option || kernel::R32(option) == g_icon_vtable)
         return __imp__sub_0012A120(ctx, base);
     uint32_t esp = ctx.esp;

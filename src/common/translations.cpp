@@ -141,6 +141,7 @@ constexpr Entry kEntries[] = {
     {"NO TRAFFIC", {{}, {}, {}, {}, u"Tanpa lalu lintas"}},
     {"AUTO SHIFT IN DRAG", {{}, {}, {}, {}, u"Gigi otomatis di drag"}},
     {"SKIP MOVIES", {{}, {}, {}, {}, u"Lewati video"}},
+    {"UNLIMITER", {{}, {}, {}, {}, {}}},
     {"CONTROLS OPACITY", {{}, {}, {}, {}, u"Transparansi kontrol"}},
     {"STICK MODE", {{}, {}, {}, {}, u"Mode analog"}},
     {"FLOATING", {{}, {}, {}, {}, u"Mengambang"}},

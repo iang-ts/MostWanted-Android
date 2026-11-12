@@ -388,6 +388,16 @@ void SkipMovie(X86Context& ctx, uint32_t allow_flag) {
 }
 void ForgetMovie(uint32_t screen) { g_movie_ticks.erase(screen); }
 
+// The boot's screen takes its byte +0x2C from a table by its package's name (+0x10, 0x13EE70 over 0x430990, 16 bytes a
+// row: package, movie, its byte at +0xC): only the EA logo's and the EA HD bumper's are 0, the PSA, intro and attract
+// skip. Dubbed discs append their credits to the EA logo (a Brazilian one's is 18 s long), so it skips too
+void AllowLogoSkip(uint32_t screen) {
+    uint32_t name = kernel::R32(screen + 0x10);
+    if (!name || !mem::IsCommitted(name) || kernel::G<uint8_t>(screen + 0x2C)) return;
+    const char* package = static_cast<const char*>(kernel::HostPtr(name));
+    if (std::strstr(package, "EALogo.fng") || std::strstr(package, "EA_hidef.fng")) kernel::G<uint8_t>(screen + 0x2C) = 1;
+}
+
 // The touch controls' RESET: the player's car put back on the road, as when it falls off the world. EResetPlayerCar
 // does it (0x1B3640): the first player ([0x49550C], the count at 0x495514), its object's ([player + 4]) IResetable
 // (found by 0x169A80, the interface 0x19AFC0; ResetCar's at +0x50), whose ResetVehicle (vtable +8, 0x1FF390, thiscall)
@@ -738,6 +748,7 @@ X86_FUNC(sub_00131A30) {
 X86_EXTERN_FUNC(__imp__sub_001311B0);
 X86_FUNC(sub_001311B0) {
     game::NoteMovie(kernel::R32(ctx.esp + 4));
+    game::AllowLogoSkip(ctx.ecx);
     game::SkipMovie(ctx, 0x2C);
     __imp__sub_001311B0(ctx, base);
 }

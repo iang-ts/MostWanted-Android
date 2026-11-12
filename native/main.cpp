@@ -34,6 +34,7 @@
 #include "build_info.h"
 #include "common/aspect.h"
 #include "common/music.h"
+#include "common/presets.h"
 #include "common/texture_packs.h"
 #include "common/translations.h"
 #include "core/input.h"
@@ -530,6 +531,8 @@ int main(int, char**) {
     std::filesystem::path hdd = HddDir();
     LOGR("app: saves in %s", hdd.c_str());
     saves::Guard(hdd);
+    presets::SetDir(hdd / "unlimiter");
+    presets::SetSaves(hdd / "E" / "UDATA" / "4541007b");
     // what tools/car_mod.py wrote is read instead of the disc's files
     std::filesystem::path mods = std::filesystem::path(host::kShared) / "mods";
     std::error_code mods_ec;

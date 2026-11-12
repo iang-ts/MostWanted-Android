@@ -118,6 +118,7 @@ const app::GameInfo app::kGame = {
                 {"cheat_drag_shift", &game::Opt().cheat_drag_shift, nullptr},
                 {"cheat_no_traffic", &game::Opt().cheat_no_traffic, nullptr},
                 {"skip_movies", &game::Opt().skip_movies, nullptr},
+                {"unlimiter", &game::Opt().unlimiter, nullptr},
                 {"fps_usage", &game::Opt().fps_usage, nullptr},
                 {"fps_temps", &game::Opt().fps_temps, nullptr},
                 {"fps_position", nullptr, &game::Opt().fps_position},

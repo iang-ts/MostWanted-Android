@@ -21,6 +21,9 @@ struct FePrompts {
     bool right_stick = false;
 };
 FePrompts CurrentFePrompts();  // any thread
+// any thread: the garage's camera turns with the right stick now (its cam_user_rotate, GarageMainScreen +0x84), which
+// a shop's screen has no prompt for
+bool GarageRotates();
 void FeTouch(bool down, float u, float v);  // any thread: the finger in shares of the frame, down or lifted
 // any thread, a moment after a tap: it came down on the highlighted button, still the same, for the pad's A; once
 bool FeTakeAccept();

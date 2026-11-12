@@ -18,6 +18,7 @@
 #include "cpu/x86_ops.h"
 #include "kernel/kernel.h"
 #include "kernel/memory.h"
+#include "unlimiter/config.h"
 
 namespace game {
 
@@ -112,38 +113,47 @@ const std::vector<uint32_t>& RemovedCars() {
 
 }  // namespace
 
+uint32_t CarTypeCount() { return CarTypes(); }
+
+// a TextureInfo of ours: a copy of the template's, its D3D texture over the pixels given (one level)
+uint32_t MakeGuestTexture(X86Context& ctx, uint32_t hash, uint32_t width, uint32_t height, uint32_t format,
+                          const std::vector<uint8_t>& pixels) {
+    constexpr uint32_t kInfoBytes = 0x80, kPlatBytes = 0x40, kD3D = 0x10, kInfoHash = 0x24, kInfoSize = 0x40;
+    if (pixels.empty()) return 0;
+    uint32_t tmpl = kernel::CallGuest(ctx, 0xC5900, {kTemplateTexture, 0, 0});
+    if (!tmpl || !kernel::R32(tmpl)) return 0;
+    uint32_t info = mem::AllocSystem(kInfoBytes), plat = mem::AllocSystem(kPlatBytes);
+    std::memcpy(kernel::HostPtr(info), kernel::HostPtr(tmpl), kInfoBytes);
+    std::memcpy(kernel::HostPtr(plat), kernel::HostPtr(kernel::R32(tmpl)), kPlatBytes);
+    kernel::W32(info, plat);
+    kernel::W32(info + kInfoHash, hash);
+    kernel::W32(info + kInfoSize, width | height << 16);
+    uint32_t data = mem::AllocContiguous(uint32_t(pixels.size()), 0, 0xFFFFFFFF, 0x1000);
+    std::memcpy(kernel::HostPtr(data), pixels.data(), pixels.size());
+    auto log2 = [](uint32_t v) {
+        uint32_t n = 0;
+        while ((1u << n) < v) n++;
+        return n;
+    };
+    uint32_t d3d = plat + kD3D;
+    kernel::W32(d3d + 4, mem::PhysicalFromVirtual(data));
+    kernel::W32(d3d + 8, 0);
+    kernel::W32(d3d + 12, (kernel::R32(d3d + 12) & 0xFF) | format << 8 | 1u << 16 | log2(width) << 20 | log2(height) << 24);
+    kernel::W32(d3d + 16, 0);
+    return info;
+}
+
 // GetTextureInfo's question, on the game thread: our TextureInfo for the name texture's hash, else 0
 uint32_t ModCarTexture(X86Context& ctx, uint32_t hash) {
     static std::map<uint32_t, uint32_t> made;
     for (const Car& car : Cars()) {
         if (!car.name_texture || car.name_texture != hash) continue;
         if (uint32_t info = made[hash]) return info;
-        constexpr uint32_t kInfoBytes = 0x80, kPlatBytes = 0x40, kD3D = 0x10, kInfoHash = 0x24, kInfoSize = 0x40;
         std::vector<uint8_t> pixels;
         char file[32];
         std::snprintf(file, sizeof file, "D:\\name_%08x.dxt", hash);
         if (!kernel::ReadGameFile(file, pixels) && !kernel::ReadGameFile("D:\\car_name.dxt", pixels)) return 0;
-        uint32_t tmpl = kernel::CallGuest(ctx, 0xC5900, {kTemplateTexture, 0, 0});
-        if (!tmpl || !kernel::R32(tmpl)) return 0;
-        uint32_t info = mem::AllocSystem(kInfoBytes), plat = mem::AllocSystem(kPlatBytes);
-        std::memcpy(kernel::HostPtr(info), kernel::HostPtr(tmpl), kInfoBytes);
-        std::memcpy(kernel::HostPtr(plat), kernel::HostPtr(kernel::R32(tmpl)), kPlatBytes);
-        kernel::W32(info, plat);
-        kernel::W32(info + kInfoHash, hash);
-        kernel::W32(info + kInfoSize, car.width | car.height << 16);
-        uint32_t data = mem::AllocContiguous(uint32_t(pixels.size()), 0, 0xFFFFFFFF, 0x1000);
-        std::memcpy(kernel::HostPtr(data), pixels.data(), pixels.size());
-        auto log2 = [](uint32_t v) {
-            uint32_t n = 0;
-            while ((1u << n) < v) n++;
-            return n;
-        };
-        uint32_t d3d = plat + kD3D;
-        kernel::W32(d3d + 4, mem::PhysicalFromVirtual(data));
-        kernel::W32(d3d + 8, 0);
-        kernel::W32(d3d + 12, (kernel::R32(d3d + 12) & 0xFF) | car.format << 8 | 1u << 16 | log2(car.width) << 20 |
-                                  log2(car.height) << 24);
-        kernel::W32(d3d + 16, 0);
+        uint32_t info = MakeGuestTexture(ctx, hash, car.width, car.height, car.format, pixels);
         made[hash] = info;
         return info;
     }
@@ -379,6 +389,7 @@ X86_FUNC(sub_00054340) {
         kernel::W32(game::kMainPoolSize, kernel::R32(game::kMainPoolSize) + game::kMainPoolExtra);
         kernel::W32(game::kCarPoolRace, kernel::R32(game::kCarPoolRace) + game::kCarPoolExtraKb);
         kernel::W32(game::kCarPoolFrontEnd, kernel::R32(game::kCarPoolFrontEnd) + game::kCarPoolExtraKb);
+        unlimiter::ExpandPools();
     }
     __imp__sub_00054340(ctx, base);
 }

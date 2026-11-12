@@ -996,6 +996,9 @@ void Recount() {
 // a swipe left or up goes to the next item, right or down; an arrow per kSwipeStep of the swipe), a tap on the
 // highlighted item's A (src/game/fe_mouse.cpp)
 constexpr float kSwipe = 0.06f, kSwipeStep = 0.12f;  // screen heights
+// a shop's camera that turns (game::GarageRotates) is turned by a drag over the car, the screen above its icon bar;
+// a swipe on the bar still steps the dpad
+constexpr float kGarageTurnArea = 0.7f;
 constexpr int kMaxSwipeSteps = 6;
 constexpr uint64_t kFePressMs = 60, kFeGapMs = 60;
 struct FeQueue {
@@ -1268,7 +1271,7 @@ void FingerDown(SDL_FingerID id, float x, float y) {
         if (kButtons[b].press == kResetCar) game::g_reset_car = true;
     } else if (Cinematic()) {
         f.role = x < Width() / 2 ? Role::Stick : Role::Look;
-    } else if (FeMenu() && game::CurrentFePrompts().right_stick) {
+    } else if (FeMenu() && (game::CurrentFePrompts().right_stick || (game::GarageRotates() && y < kGarageTurnArea * Height()))) {
         f.role = Role::FeTap;  // FEng's pointer would click whatever the drag began on (the map's GPS)
     } else if (FeMenu()) {
         f.role = Role::FeMouse;

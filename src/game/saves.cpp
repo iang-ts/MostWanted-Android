@@ -11,6 +11,7 @@
 #include "cpu/x86_ops.h"
 #include "kernel/kernel.h"
 #include "kernel/memory.h"
+#include "unlimiter/config.h"
 
 namespace {
 constexpr uint32_t kFeDatabase = 0x48EDD4, kCarListHash = 8;
@@ -19,7 +20,7 @@ constexpr uint32_t kSavedHash = 0x10 + 0x59F9;  // past the save's settings, bot
 
 X86_EXTERN_FUNC(__imp__sub_00147600);
 X86_FUNC(sub_00147600) {  // thiscall (data, size, first load, player): UserProfile from a save, true if it took it
-    uint32_t data = kernel::R32(ctx.esp + 4), size = kernel::R32(ctx.esp + 8);
+    uint32_t data = kernel::R32(ctx.esp + 4), size = kernel::R32(ctx.esp + 8), profile = ctx.ecx;
     uint32_t db = kernel::R32(kFeDatabase);
     if (db && size >= kSavedHash + 4 && mem::IsCommitted(data + kSavedHash + 3)) {
         uint32_t saved = kernel::R32(data + kSavedHash), ours = kernel::R32(db + kCarListHash);
@@ -29,4 +30,7 @@ X86_FUNC(sub_00147600) {  // thiscall (data, size, first load, player): UserProf
         }
     }
     __imp__sub_00147600(ctx, base);
+    uint32_t result = ctx.eax;
+    if (result & 0xFF) unlimiter::RestorePresets(profile);
+    ctx.eax = result;
 }

@@ -61,6 +61,8 @@
     <string name="mods_update">Update</string>
     <string name="mods_later">Later</string>
     <string name="mods_version">Version</string>
+    <string name="mods_unlimiter_on">Imported</string>
+    <string name="mods_unlimiter_off">Not imported: install its zip from file</string>
     <string name="mods_credit_cars">Cars by their authors, from NFSAddons and NFSMods</string>
     <string name="mods_open_site_sub">Opens the site in your browser</string>
     <string name="mods_from_file_sub">A ZIP, 7z or RAR you downloaded</string>

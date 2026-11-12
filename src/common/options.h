@@ -5,6 +5,7 @@
 #include <iterator>
 #include <map>
 #include <string>
+#include <vector>
 
 struct X86Context;
 namespace input {
@@ -58,6 +59,7 @@ struct Options {
     bool cheat_no_traffic = false;    // no traffic cars, src/game/game.cpp
     bool cheat_drag_shift = false;    // the gears shift by themselves in drag races, from the next race
     bool skip_movies = false;         // the movies end as they start, src/game/game.cpp
+    bool unlimiter = true;
     uint32_t audio_output = 0;  // audio::kOutputAuto, kOutputStereo, kOutputSurround or kOutputMono
     std::string language = "int";  // one of kLanguages
     std::map<std::string, std::string> keys;  // action id to key names, absent is the default
@@ -82,6 +84,11 @@ void DragShiftFrame(X86Context& ctx);   // src/game/game.cpp: game thread, at ea
 void MusicFrame(X86Context& ctx);                 // src/game/game.cpp: game thread, at each present
 void ModCarsFrame(X86Context& ctx);     // src/game/car_mods.cpp: game thread, at each present
 uint32_t ModCarTexture(X86Context& ctx, uint32_t hash);  // src/game/car_mods.cpp: an add-on's name texture, or 0
+uint32_t CarTypeCount();
+uint32_t MakeGuestTexture(X86Context& ctx, uint32_t hash, uint32_t width, uint32_t height, uint32_t format,
+                          const std::vector<uint8_t>& pixels);
+uint32_t AddedTexture(X86Context& ctx, uint32_t hash);
+void UnlimiterFrame(X86Context& ctx);
 void TexturePacksFrame(X86Context& ctx);  // src/game/texture_packs.cpp: game thread, at each present
 // cinematic mode (src/game/cinematic.cpp): the pause menu's icon asks for it, the next frame enters
 void CinematicRequest(bool from_pause_menu = false);  // from the menu: leaving opens the pause menu again

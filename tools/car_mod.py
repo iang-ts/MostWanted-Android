@@ -4,7 +4,7 @@
 # CarConverter.java) reads the same formats and holds many cars, in car types of their own: a change to a format goes in both.
 # out/ goes in MostWanted/mods on the phone (NFS/ZDIR.BIN, NFS/ZZDATA16.BIN, cars.txt, car_name.dxt); the kernel reads them over the
 # disc's. One car at a time: it has the one slot.
-import argparse, collections, glob, heapq, math, os, re, struct, sys
+import argparse, collections, glob, heapq, math, os, re, shutil, struct, sys
 
 SLOT = "BMWM3"  # no pvehicle's MODEL names it, and its 191 parts are laid out as every car's
 VLT_CLASSES_SKIPPED = ("emitterdata", "emittergroup")  # smoke with its place moved, not worth new nodes
@@ -349,7 +349,7 @@ def convert_solid(d, car):
     lod = LOD_UP.get(name[-1])
     if not name.endswith("_" + name[-1]) or lod is None or idx is None or verts is None:
         return None
-    s.name = name[:-1] + lod
+    s.name = name if "_DECAL_" in name else name[:-1] + lod
     s.hash = bhash(s.name)
     indices = struct.unpack("<%dH" % (len(idx) // 2), idx[:len(idx) & ~1])
     vb = []
@@ -424,8 +424,9 @@ def convert_solid(d, car):
 # the car pool holds every car of a race (src/game/car_mods.cpp makes it 39 MB, the disc's is 7550 KB), and a car loads
 # about its whole file. PC mods often repeat their best model at every LOD: those lower LODs are thinned to their share,
 # and only a car over this limit has its best models cut
-LOD_SHARE = (1, 0.12, 0.04, 0.015)  # of the part's best, by LODs below it: the player sees the best
-MAX_GEOMETRY = 12 << 20
+LOD_SHARE = (1, 0.5, 0.25, 0.12)  # of the part's best, by LODs below it: the player sees the best
+MAX_GEOMETRY = 24 << 20
+OWN_LOD = 1.5
 VERTEX = 32  # pos, uv, normal
 
 
@@ -446,12 +447,33 @@ def triangle_cap(tops, budget):
     return low
 
 
+WHEEL_SOLID = re.compile(r".*_(TIRE|WHEEL)_[A-E]")
+
+
+def copy_as(src, dst):
+    for field in ("flags", "verts", "ngroups", "tris", "tex", "sha", "groups", "ib"):
+        setattr(dst, field, getattr(src, field))
+    dst.vb = [bytes(v) for v in src.vb]
+    nm = dst.name.encode("latin-1") + b"\0"
+    head = bytearray(src.head[:0xA0] + nm + b"\0" * (align(len(nm), 4) - len(nm)))
+    struct.pack_into("<I", head, 0x10, dst.hash)
+    dst.head = bytes(head)
+
+
 def reduce_lods(solids):
     best = {}
     for s in solids:
         part = s.name[:-1]
         if part not in best or s.name < best[part].name:
             best[part] = s
+    wheels = 0
+    for s in solids:
+        b = best[s.name[:-1]]
+        if b is not s and WHEEL_SOLID.fullmatch(s.name):
+            copy_as(b, s)
+            wheels += 1
+    if wheels:
+        print("geometry: %d wheel LODs given their best model" % wheels)
     before = sum(solid_bytes(s) for s in solids)
     for s in solids:
         if s.verts > MAX_SOLID_VERTICES:
@@ -468,8 +490,10 @@ def reduce_lods(solids):
     for s in solids:
         b = best[s.name[:-1]]
         below = ord(s.name[-1]) - ord(b.name[-1])
-        if below > 0:
-            reduce_solid(s, int(b.tris * LOD_SHARE[min(below, len(LOD_SHARE) - 1)]))
+        if below > 0 and not WHEEL_SOLID.fullmatch(s.name):
+            target = int(b.tris * LOD_SHARE[min(below, len(LOD_SHARE) - 1)])
+            if s.tris > target * OWN_LOD:
+                reduce_solid(s, target)
     # the lower LODs may have stopped above their share: the best ones pay for it
     for _ in range(4):
         total = sum(solid_bytes(s) for s in solids)
@@ -1146,6 +1170,9 @@ class Texture:
     pass
 
 
+LOOK, LOOK_SIZE = 0x2D, 6
+
+
 def read_mod_textures(mt):
     recs = data = None
     for c, s, o in walk_all(mt):
@@ -1159,6 +1186,7 @@ def read_mod_textures(mt):
         t.hash = h
         t.name = d[at - 24:at].split(b"\0")[0].decode("latin-1")
         t.w, t.h = struct.unpack_from("<HH", d, at + 0x20)
+        t.look = d[at + LOOK:at + LOOK + LOOK_SIZE]
         fourcc = re.search(rb"DXT[1-5]", d[at:])
         if not fourcc:
             continue  # a format no Xbox record is copied for: one texture less, not one car less
@@ -1230,6 +1258,7 @@ def build_textures(tex, xt, car):
         n = len(t.px)
         struct.pack_into("<IIIII", rec, 24 + 0xC, offset, offset + n, n, 0, n)
         struct.pack_into("<HHBB", rec, 24 + 0x20, t.w, t.h, ilog2(t.w), ilog2(t.h))
+        rec[24 + LOOK:24 + LOOK + LOOK_SIZE] = t.look
         pad = (8 - (n + len(rec))) % 16
         blocks.append((t.hash, t.px + b"\0" * pad + bytes(rec)))
         offset = align(offset + n, 0x80)
@@ -1438,8 +1467,64 @@ class Vault:
             return base, d
         return None, d
 
+    def _retarget(self, f, target):
+        moved = (f[0], f[1], f[2], target)
+        for i, g in enumerate(self.new_fix[0]):
+            if g is f:
+                self.new_fix[0][i] = moved
+                return
+        self.fix[0][f[0]] = moved
+        self.ptrs = [moved if p is f else p for p in self.ptrs]
+
+    def resize(self, cls, node, field, size):
+        c, fk = attrib_key(cls), attrib_key(field)
+        d = self.classes[c][1].get(fk)
+        if d is None:
+            return "no such field"
+        ty, lo, sz, cnt, fl = d
+        if not fl & 1 or not 0 <= size <= 0xFFFF:
+            return "not an array"
+        head = align(8, self.aligns.get((c, fk), 4))
+        at = self._rec(cls, node)
+        fix = None
+        if fl & 2:
+            f = self._all_fix(at + 0x1C)
+            if not f:
+                return "not in this node"
+            base = f[3] + lo
+        else:
+            ne, nt = struct.unpack("<II", self._read(at + 20, 8))
+            ents = at + 32 + (nt & 0xFFFF) * 4
+            for e in range(ne):
+                k_, v, ti, efl = struct.unpack("<IIHH", self._read(ents + e * 12, 12))
+                if k_ == fk and not efl & 0x20:
+                    fix = self._all_fix(ents + e * 12 + 4)
+                    break
+            if not fix:
+                return "not in this node"
+            base = fix[3]
+        count, cap, el = struct.unpack_from("<HHH", self.bin, base)
+        if size <= cap:
+            struct.pack_into("<H", self.bin, base, size)
+            return None
+        if not fix:
+            return "room for %d" % cap
+        if any(q in self.bin_fix for q in range(base, base + head + cap * el, 4)):
+            return "pointers in the array"
+        moved = align(len(self.bin), 16)
+        self.bin += b"\0" * (moved - len(self.bin))
+        array = bytearray(head + size * el)
+        n = head + min(count, cap) * el
+        array[:n] = self.bin[base:base + n]
+        struct.pack_into("<HH", array, 0, size, size)
+        self.bin += array
+        self._retarget(fix, moved)
+        return None
+
     def set_value(self, cls, node, field, index, member, text):
         place, d = self.field_place(cls, node, field, index)
+        if d is not None and place is None and d[4] & 1 and not is_zero(text) and self.resize(cls, node, field, index + 1) is None:
+            place, d = self.field_place(cls, node, field, index)
         if d is None:
             return "no such field"
         if place is None:
@@ -1552,6 +1637,13 @@ MEMBERS = {
 }
 
 
+def is_zero(text):
+    try:
+        return float(text) == 0
+    except ValueError:
+        return False
+
+
 def pack_float(text):
     try:
         return struct.pack("<f", float(text))
@@ -1627,6 +1719,15 @@ def apply_script(main, fe, path):
                 continue
             v.clone(cls, src, dst, parent)
             done += 1
+        elif op == "add_node" and len(w) >= 4:
+            parent, dst = w[2], w[3]
+            if (attrib_key(cls), attrib_key(dst)) in v.colls:
+                continue
+            if (attrib_key(cls), attrib_key(parent)) not in v.colls:
+                skipped["add %s %s: parent missing" % (cls, dst)] += 1
+                continue
+            v.clone(cls, parent, dst, parent)
+            done += 1
         elif op == "update_field":
             node, field = w[2], w[3]
             m = re.fullmatch(r"(\w+)(?:\[(\d+)\])?", field)
@@ -1642,6 +1743,15 @@ def apply_script(main, fe, path):
             why = v.set_value(cls, node, name, index, member, text)
             if why:
                 skipped["%s.%s: %s" % (cls, name, why)] += 1
+            else:
+                done += 1
+        elif op == "resize_field" and len(w) > 4 and (attrib_key(cls), attrib_key(w[2])) in v.colls:
+            try:
+                why = v.resize(cls, w[2], w[3], int(w[4]))
+            except ValueError:
+                why = "size " + w[4]
+            if why:
+                skipped["resize %s.%s: %s" % (cls, w[3], why)] += 1
             else:
                 done += 1
         elif op in ("add_field", "resize_field"):
@@ -1676,7 +1786,261 @@ def make_index(manufacturer):
     return -1
 
 
-def patch_global(g, car, manufacturer):
+BOOL, INT, FLOAT, KEY, STRING, TWO_STRING, COLOR, CUSTOM = range(8)
+PART_KEYS = {}
+for _n in ("STOCK REMAP ONLINE CENTER MIRROR ISDECAL FULLBODY HOODLEFT HOODRIGHT VERTSPLIT WHEELLEFT WHEELRIGHT USEMARKER1 "
+           "USEMARKER2 COMPLEXTARGET CARBONFIBRE EXCLUDE_SUV EXCLUDE_UG1 EXCLUDE_UG2 WARNONDELETE KITNOTPAINT01 KITNOTPAINT03 "
+           "KITNOTPAINT04 KITNOTPAINT06 KITNOTPAINT07 KITNOTPAINT10 KITNOTPAINT18 STOCK_MATERIAL").split():
+    PART_KEYS[bhash(_n)] = BOOL
+PART_KEYS[0x6509EC92] = BOOL
+for _n in "BLEND HOODHUE HOODLUM HOODSAT TIREHUE TIRELUM TIRESAT SPINNEROFFSET".split():
+    PART_KEYS[bhash(_n)] = FLOAT
+PART_KEYS[0x9A9B6DDC] = FLOAT
+for _n in "TEXTURE NAME_OFFSET LOD_CHARACTERS_OFFSET".split():
+    PART_KEYS[bhash(_n)] = STRING
+for _n in ("CV MAT0 MAT1 MAT2 MAT3 MAT4 MAT5 MAT6 MAT7 NAME SIZE SHAPE SWATCH MATNAMEA MATNAMEB HOODUNDER BRAND_NAME PAINTGROUP "
+           "HOODEMITTER TEXTUREHASH EXCLUDEDECAL LANGUAGEHASH SPEECHCOLOUR TEXTURE_NAME WHEELEMITTER SPECIFICCARNAME SPINNER_TEXTURE "
+           "GROUPLANGUAGEHASH VINYLLANGUAGEHASH COLOR0LANGUAGEHASH COLOR1LANGUAGEHASH COLOR2LANGUAGEHASH COLOR3LANGUAGEHASH "
+           "LIGHT_MATERIAL_NAME PART_NAME_BASE_HASH LOD_NAME_PREFIX_NAMEHASH").split():
+    PART_KEYS[bhash(_n)] = KEY
+for _n in ("COLOR0ID COLOR1ID COLOR2ID COLOR3ID LOD_BASE_NAME PART_NAME_OFFSETS PARTID_UPGRADE_GROUP MODEL_TABLE_OFFSET RED RED2 "
+           "BLUE ALPHA GREEN GLOSS BLUE2 ALPHA2 GREEN2 MAX_LOD DISPRED DISPBLUE HUDINDEX ANIMSTYLE DISPGREEN KITNUMBER NUMCOLOURS "
+           "NUM_DECALS DAMAGELEVEL SPOKE_COUNT INNER_RADIUS OUTER_RADIUS LANGUAGEHASHABR NUMREMAPCOLOURS MORPHTARGET_NUM "
+           "PART_NAME_SELECTOR LOD_NAME_PREFIX_SELECTOR").split():
+    PART_KEYS[bhash(_n)] = INT
+PART_KEYS[0x7D29CF3E] = INT
+CUSTOM_KINDS = {1: BOOL, 2: INT, 3: FLOAT, 4: STRING, 5: TWO_STRING, 6: COLOR, 8: KEY}
+
+
+class Reader:
+    def __init__(self, b):
+        self.b, self.at = b, 0
+
+    def take(self, fmt):
+        v = struct.unpack_from(fmt, self.b, self.at)
+        self.at += struct.calcsize(fmt)
+        return v[0] if len(v) == 1 else v
+
+    def text(self):
+        end = self.b.index(b"\0", self.at)
+        s = self.b[self.at:end].decode("utf-8", "replace")
+        self.at = end + 1
+        return s
+
+    def raw(self, n):
+        out = self.b[self.at:self.at + n]
+        if len(out) != n:
+            raise ValueError("the collection ends early")
+        self.at += n
+        return out
+
+
+def collection_body(d):
+    # Binary's export of a collection: gMpB, its size, the game, the manager's name hash, then one block
+    n = struct.unpack_from("<I", d, 16)[0]
+    return unpack(d[20:20 + n], n)
+
+
+def collection_of(d):
+    if len(d) < 20 or d[:4] != b"gMpB":
+        return None, None
+    try:
+        return struct.unpack_from("<I", d, 12)[0], Reader(collection_body(d)).text().upper()
+    except (ValueError, struct.error):
+        return None, None
+
+
+def find_collection(root, manager, car):
+    for p in sorted(glob.glob(os.path.join(glob.escape(root), "**", "*.[bB][iI][nN]"), recursive=True)):
+        d = open(p, "rb").read(20)
+        if d[:4] != b"gMpB":
+            continue
+        d = open(p, "rb").read()
+        key, name = collection_of(d)
+        if key == bhash(manager) and name == car:
+            return d
+    return None
+
+
+def read_model(d):
+    r = Reader(collection_body(d))
+    r.text()
+    parts = []
+    for _ in range(r.take("<i")):
+        count = r.take("<i")
+        p = {"label": r.text(), "debug": r.text(), "slot": r.take("<B"), "upgrade": r.take("<H"), "lod": None, "attrs": []}
+        if r.take("<B"):
+            templated = r.take("<B") != 0
+            concat = r.text() if r.take("<B") else None
+            has = [r.take("<B") for _ in range(5)]
+            p["lod"] = (templated, concat, [r.text() if h else None for h in has])
+        for _ in range(count):
+            key = r.take("<I")
+            kind = PART_KEYS.get(key, CUSTOM)
+            if kind == CUSTOM:
+                name = r.text()
+                ty = r.take("<i")
+                kind = CUSTOM_KINDS.get(ty, CUSTOM)
+                if kind == CUSTOM:
+                    raise ValueError("the attribute %s is of a type %d no reader knows" % (name, ty))
+            a = {"key": key, "kind": kind, "value": 0, "text": None, "text2": None}
+            if kind == BOOL:
+                a["value"] = 1 if r.take("<B") else 0
+            elif kind in (INT, FLOAT):
+                a["value"] = r.take("<I")
+            elif kind == KEY:
+                s = r.text()
+                a["value"] = 0xFFFFFFFF if not s else int(s[2:], 16) if s.lower().startswith("0x") and len(s) == 10 else bhash(s)
+            elif kind == STRING:
+                if r.take("<B"):
+                    a["text"] = r.text()
+            elif kind == TWO_STRING:
+                one, two = r.take("<B"), r.take("<B")
+                a["text"] = r.text() if one else None
+                a["text2"] = r.text() if two else None
+            elif kind == COLOR:
+                alpha, blue, green, red = r.take("<4B")
+                a["value"] = red | green << 8 | blue << 16 | alpha << 24
+            p["attrs"].append(a)
+        parts.append(p)
+    return parts
+
+
+def read_car_type(d, car, type_id):
+    r = Reader(collection_body(d))
+    out = bytearray(0xD0)
+    r.text()
+    make = r.text().upper()
+    for at, n, txt in ((0, 16, car), (0x10, 16, car), (0x20, 32, "CARS\\%s\\GEOMETRY.BIN" % car), (0x40, 16, make)):
+        out[at:at + n] = txt.encode("latin-1")[:n - 1].ljust(n, b"\0")
+    struct.pack_into("<I", out, 0x50, bhash(car))
+    out[0x54:0x58] = r.raw(4)
+    out[0x58:0x5F] = r.raw(7)
+    out[0x60:0x90] = r.raw(48)
+    struct.pack_into("<I", out, 0x90, type_id)
+    out[0x94:0x9C] = r.raw(8)
+    out[0x9C:0xA6] = r.raw(10)
+    out[0xA8:0xBC] = r.raw(20)
+    out[0xBC:0xC8] = r.raw(12)
+    out[0xCC:0xD0] = r.raw(4)
+    return bytes(out), make
+
+
+def read_collision(d, key):
+    r = Reader(collection_body(d))
+    r.text()
+    bounds, clouds = r.take("<i"), r.take("<i")
+    bound_bytes = r.raw(bounds * 0x30)
+    cloud_bytes = [r.raw(r.take("<i") * 16) for _ in range(clouds)]
+    resolved = r.take("<B")
+    out = bytearray(struct.pack("<4I", key, bounds, 1 if resolved else 0, 0)) + bound_bytes + struct.pack("<4I", clouds, 0, 0, 0)
+    for c in cloud_bytes:
+        out += struct.pack("<4I", len(c) // 16, 0, 0, 0) + c
+    return bytes(out)
+
+
+class PartTables:
+    def __init__(self, g, sub):
+        self.string_base = sub[0x34606][0]
+        self.offset_base = sub[0x3460C][0]
+        head = sub[0x34603][1]
+        self.attribute_count = struct.unpack_from("<I", g, head + 0x20)[0]
+        self.struct_count = struct.unpack_from("<I", g, head + 0x30)[0]
+        self.strings, self.offsets, self.attributes, self.structs = bytearray(), bytearray(), bytearray(), bytearray()
+        self.string_at, self.attribute_at, self.list_at, self.struct_at = {}, {}, {}, {}
+        self.next_attribute, self.next_struct = self.attribute_count, self.struct_count
+
+    def string(self, s):
+        if s is None:
+            return 0xFFFFFFFF
+        if s not in self.string_at:
+            self.string_at[s] = (self.string_base + len(self.strings)) >> 2
+            self.strings += s.encode("latin-1", "replace") + b"\0"
+            self.strings += b"\0" * (align(len(self.strings), 4) - len(self.strings))
+        return self.string_at[s]
+
+    def attribute(self, a):
+        if a["kind"] == STRING:
+            value = self.string(a["text"])
+        elif a["kind"] == TWO_STRING:
+            value = (self.string(a["text"]) & 0xFFFF if a["text"] is not None else 0xFFFF) | \
+                    (self.string(a["text2"]) & 0xFFFF if a["text2"] is not None else 0xFFFF) << 16
+        else:
+            value = a["value"] & 0xFFFFFFFF
+        k = (a["key"], value)
+        if k not in self.attribute_at:
+            self.attributes += struct.pack("<II", *k)
+            self.attribute_at[k] = self.next_attribute
+            self.next_attribute += 1
+        return self.attribute_at[k]
+
+    def list(self, attrs):
+        if not attrs:
+            return 0xFFFF
+        idx = tuple(self.attribute(a) for a in attrs)
+        if idx not in self.list_at:
+            self.list_at[idx] = (self.offset_base + len(self.offsets)) // 2
+            self.offsets += struct.pack("<H%dH" % len(idx), len(idx), *idx)
+        return self.list_at[idx]
+
+    def struct(self, lod):
+        if lod is None:
+            return 0xFFFF
+        templated, concat, names = lod
+        if templated:
+            b = struct.pack("<HH5I", 1, 0xFFFF if concat is None else self.string(concat),
+                            *(0xFFFFFFFF if n is None else self.string(n) for n in names))
+        else:
+            b = struct.pack("<I5I", 0xFFFF0000, *(0xFFFFFFFF if n is None else bhash(n) for n in names))
+        if b not in self.struct_at:
+            self.structs += b
+            self.struct_at[b] = self.next_struct
+            self.next_struct += 1
+        return self.struct_at[b]
+
+    def row(self, p, car_index):
+        return struct.pack("<IBHBHHH", bhash(p["label"]), p["slot"], p["upgrade"], car_index,
+                           0xFFFF if p["debug"] is None else self.string(p["debug"]) & 0xFFFF, self.list(p["attrs"]), self.struct(p["lod"]))
+
+    def check(self):
+        if (self.string_base + len(self.strings)) >> 2 > 0xFFFF or self.next_attribute > 0xFFFF or \
+                (self.offset_base + len(self.offsets)) // 2 > 0xFFFF or self.next_struct > 0xFFFF:
+            sys.exit("too many parts for the game's tables")
+        self.offsets += b"\0" * (align(len(self.offsets), 4) - len(self.offsets))
+
+
+def add_own_parts(g, sub, parts, part_car):
+    # the mod's own parts under the slot's car index, the slot's own rows left with no slot
+    sp, op = sub[0x34604]
+    rows = sp // 14
+    for i in range(rows):
+        if g[op + i * 14 + 7] == part_car:
+            g[op + i * 14 + 4] = 0xFF
+    t = PartTables(g, sub)
+    new_rows = b"".join(t.row(p, part_car) for p in parts)
+    t.check()
+    head = sub[0x34603][1]
+    real = struct.unpack_from("<I", g, head + 0x38)[0]
+    grown = len(new_rows) + len(t.strings) + len(t.offsets) + len(t.attributes) + len(t.structs)
+    pad = align(grown, 0x80) - grown
+    inserts = [(op + real * 14, 0x34604, new_rows + b"\0" * pad),
+               (sub[0x3460A][1] + t.struct_count * 24, 0x3460A, bytes(t.structs)),
+               (sub[0x34605][1] + t.attribute_count * 8, 0x34605, bytes(t.attributes)),
+               (sub[0x3460C][1] + sub[0x3460C][0], 0x3460C, bytes(t.offsets)),
+               (sub[0x34606][1] + sub[0x34606][0], 0x34606, bytes(t.strings))]
+    for at, cid, data in inserts:
+        if not data:
+            continue
+        g[at:at] = data
+        size_at = sub[cid][1] - 4
+        struct.pack_into("<I", g, size_at, sub[cid][0] + len(data))
+    struct.pack_into("<I", g, head + 0x20, t.next_attribute)
+    struct.pack_into("<I", g, head + 0x30, t.next_struct)
+    struct.pack_into("<I", g, head + 0x38, real + len(new_rows) // 14)
+    return grown + pad
+
+
+def patch_global(g, car, manufacturer, parts=None, car_type=None, collision=None):
     g = bytearray(g)
     sub = {}
     for c, s, o in chunks(g):
@@ -1684,6 +2048,7 @@ def patch_global(g, car, manufacturer):
             cars = o + 8  # after its fill
         elif c == 0x80034602:
             sub = {c2: (s2, o2) for c2, s2, o2 in chunks(g, o, o + s)}
+            parts_chunk = (s, o)
         elif c == 0x8003B900:
             collisions = (s, o)
     names = [bytes(g[cars + i * 0xD0:cars + i * 0xD0 + 16]).split(b"\0")[0].decode() for i in range(84)]
@@ -1694,6 +2059,8 @@ def patch_global(g, car, manufacturer):
         rec[at:at + n] = txt.encode("latin-1").ljust(n, b"\0")
     struct.pack_into("<I", rec, 0x50, bhash(car))
     struct.pack_into("<I", rec, 0x90, slot)
+    if car_type is not None:
+        rec = bytearray(read_car_type(car_type, car, slot)[0])
     g[cars + slot * 0xD0:cars + (slot + 1) * 0xD0] = rec
 
     sb, ob = sub[0x3460B]
@@ -1701,7 +2068,13 @@ def patch_global(g, car, manufacturer):
         if struct.unpack_from("<I", g, ob + i * 4)[0] == bhash(SLOT):
             struct.pack_into("<I", g, ob + i * 4, bhash(car))
             part_car = i
-    hide_extra_parts(g, sub, part_car)
+    if parts:
+        grown = add_own_parts(g, {k: (s, o) for k, (s, o) in sub.items()}, parts, part_car)
+        struct.pack_into("<I", g, parts_chunk[1] - 4, parts_chunk[0] + grown)
+        collisions = (collisions[0], collisions[1] + grown) if collisions[1] > parts_chunk[1] else collisions
+        print("parts: %d of the mod's own" % len(parts))
+    else:
+        hide_extra_parts(g, sub, part_car)
 
     # a collision of its own, the Gallardo's: BMWM3 has none, nobody drives it. A multiple of 0x80 more keeps what follows
     # aligned; the list is walked at load
@@ -1716,6 +2089,8 @@ def patch_global(g, car, manufacturer):
         sys.exit("no Gallardo collision to copy")
     end = o + s
     fill = (16 - (end + 8) % 16) % 16
+    if collision is not None:
+        item = read_collision(collision, attrib_key(car))
     body = bytearray(b"\x11" * fill + item)
     struct.pack_into("<I", body, fill, attrib_key(car))
     grow = align(8 + len(body), 0x80)
@@ -1800,13 +2175,76 @@ def build_zdir(disc, files, alias):
     return archive, z, bytes(data)
 
 
+PC_ONLY_TEXTURES = (("TIRE_STYLE01", "TREAD"), ("DRIVER_PLAYER", "DRIVER_CUTOUT"))
+
+
+def remap_textures(solids, tex, car):
+    own = {t.hash for t in tex}
+    remapped = 0
+    for name, target in PC_ONLY_TEXTURES:
+        old, new = bhash(name), bhash(car + target if target.startswith("_") else target)
+        if old in own or (target.startswith("_") and new not in own):
+            continue
+        for s in solids:
+            if not s.tex:
+                continue
+            b = bytearray(s.tex)
+            for i in range(0, len(b) - 3, 4):
+                if struct.unpack_from("<I", b, i)[0] == old:
+                    struct.pack_into("<I", b, i, new)
+                    remapped += 1
+            s.tex = bytes(b)
+    if remapped:
+        print("textures: %d PC-only texture uses given the car's own" % remapped)
+
+
+ADD_STRING = re.compile(r'^\s*add_string\s+\S*\\([A-Za-z_]+)\.BIN\s+\S+\s+\S+\s+(0x[0-9A-Fa-f]{8}|\S+)\s+(\S+)\s+"([^"]*)"', re.I | re.M)
+
+
+def write_extras(root, car, out):
+    ini = [p for p in glob.glob(os.path.join(glob.escape(root), "**", "*.ini"), recursive=True)
+           if os.path.basename(p).upper() == car + ".INI" and "unlimiterdata" in p.lower()]
+    if ini:
+        os.makedirs(os.path.join(out, "unlimiter", "cars"), exist_ok=True)
+        shutil.copyfile(ini[0], os.path.join(out, "unlimiter", "cars", car + ".ini"))
+    strings = {}
+    for p in glob.glob(os.path.join(glob.escape(root), "**", "*.end"), recursive=True):
+        for m in ADD_STRING.finditer(open(p, encoding="utf-8", errors="replace").read()):
+            key = m.group(2)
+            h = int(key[2:], 16) if key.lower().startswith("0x") else bhash(m.group(3))
+            strings.setdefault(m.group(1).lower(), {})[h] = m.group(4)
+    if strings:
+        os.makedirs(os.path.join(out, "strings"), exist_ok=True)
+        for lang, rows in strings.items():
+            with open(os.path.join(out, "strings", lang + ".txt"), "w", encoding="utf-8", newline="\n") as f:
+                for h, text in rows.items():
+                    f.write("%08x %s\n" % (h, text))
+    listing = []
+    for p in sorted(glob.glob(os.path.join(glob.escape(root), "**", "*.dds"), recursive=True)):
+        folder = os.path.dirname(p).lower()
+        if "textures" not in folder:
+            continue
+        dds = open(p, "rb").read()
+        if len(dds) < 128 or dds[84:88] not in XBOX_FORMAT:
+            continue
+        lh, lw = struct.unpack_from("<II", dds, 12)
+        h = bhash(os.path.splitext(os.path.basename(p))[0].upper())
+        os.makedirs(os.path.join(out, "addtex"), exist_ok=True)
+        with open(os.path.join(out, "addtex", "%08x.dxt" % h), "wb") as f:
+            f.write(dds[128:128 + ((lw + 3) // 4) * ((lh + 3) // 4) * dxt_block_size(dds[84:88])])
+        listing.append("%08x %d %d %d\n" % (h, lw, lh, XBOX_FORMAT[dds[84:88]]))
+    if listing:
+        with open(os.path.join(out, "addtex.txt"), "w", newline="\n") as f:
+            f.writelines(listing)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("iso")
     ap.add_argument("mod")
     ap.add_argument("out")
     ap.add_argument("--no-vault-script", action="store_true", help="the car's own handling and wheel places left out")
-    ap.add_argument("--max-textures", type=int, default=1536, help="KB of all the car's textures; the disc's have about 100")
+    ap.add_argument("--max-textures", type=int, default=8192, help="KB of all the car's textures; the disc's have about 100")
     args = ap.parse_args()
 
     disc = Disc(args.iso)
@@ -1826,6 +2264,8 @@ def main():
     tex_path = os.path.join(os.path.dirname(geo[0]), "TEXTURES.BIN")
     mg, mt = open(geo[0], "rb").read(), open(tex_path, "rb").read()
 
+    parts_d = find_collection(root, "DBModelParts", car)
+    parts = read_model(parts_d) if parts_d else None
     xg = disc.load("CARS\\GALLARDO\\GEOMETRY.BIN")
     solids = []
     for d in read_mod_solids(mg):
@@ -1835,10 +2275,12 @@ def main():
     print("geometry: %d solids" % len(solids))
     # thinned first, each attachment alone, so the body they go into stays under a solid's vertex count
     reduce_lods(solids)
-    merge_attachments(solids)
+    if not parts:
+        merge_attachments(solids)
+    tex = read_mod_textures(mt)
+    remap_textures(solids, tex, car)
     geometry = build_geometry(solids, xg)
 
-    tex = read_mod_textures(mt)
     shrink_textures(tex, args.max_textures * 1024)
     textures = build_textures(tex, disc.load("CARS\\GALLARDO\\TEXTURES.BIN"), car)
 
@@ -1878,8 +2320,13 @@ def main():
         found = other
     if found:
         manufacturer, title = found
+    car_type_d = find_collection(root, "CarTypeInfos", car)
+    if car_type_d:
+        manufacturer = read_car_type(car_type_d, car, 0)[1] or manufacturer
+    collision_d = find_collection(root, "Collisions", car)
 
-    g = patch_global(g, car, manufacturer)
+    g = patch_global(g, car, manufacturer, parts, car_type_d, collision_d)
+    write_extras(root, car, args.out)
     lzc = jdlz_encode(g)
     if jdlz_decode(lzc) != g:
         sys.exit("JDLZ encoder failed its round trip")

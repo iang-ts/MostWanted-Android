@@ -11,6 +11,7 @@
 // own scripts do with a click still works (MainMenu's arrows, a dialog's OK). A tap on the highlighted button, which
 // those screens accept on the pad's A alone, is told to the touch controls to press A (FeTakeAccept).
 #include <atomic>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <cstring>
@@ -23,6 +24,7 @@
 #include "common/options.h"
 #include "common/translations.h"
 #include "cpu/x86_context.h"
+#include "cpu/x86_ops.h"
 #include "kernel/kernel.h"
 #include "kernel/memory.h"
 
@@ -362,4 +364,25 @@ void FeTouch(bool down, float u, float v) {
     g_mouse_frames = kMouseFrames;
 }
 
+// HandleJoyEvents (0x294210, thiscall, from the tick 0x2A9576) turns the camera with the stick only while the screen's
+// +0x84 is set: the moment of the last tick that had it, which a garage leaves behind it
+namespace {
+std::atomic<int64_t> g_rotate_ms{-1000};
+constexpr int64_t kRotateHold = 250;
+
+int64_t SteadyMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void NoteGarageRotates() { g_rotate_ms = SteadyMs(); }
+}  // namespace
+
+bool GarageRotates() { return SteadyMs() - g_rotate_ms.load() < kRotateHold; }
+
 }  // namespace game
+
+X86_EXTERN_FUNC(__imp__sub_00294210);
+X86_FUNC(sub_00294210) {
+    if (kernel::G<uint8_t>(ctx.ecx + 0x84)) game::NoteGarageRotates();
+    __imp__sub_00294210(ctx, base);
+}
