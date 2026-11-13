@@ -34,9 +34,12 @@ uint32_t NodeMenu(uint32_t menu) {
         case kMenuLicensePlate: return 0x309;
         case kMenuTireStyle: return 0x314;
         case kMenuNeon: return 0x315;
-        case kMenuVinylCustom:
-            return Data("_VinylGroups.ini").Int("Group0", "UseAltCamera", 1) ? kVinylsAltCamera : kVinylsCamera;
+        default: break;
     }
+    // every vinyl group takes the low camera or angle_customize_vinyl_2, from its own UseAltCamera
+    if (menu == kMenuVinylCustom || (menu >= kMenuVinylGroupFirst && menu <= kMenuVinylGroupLast) ||
+        (menu >= kMenuVinylExtra && menu < kMenuVinylExtra + kMaxVinylGroups))
+        return VinylAltCamera(menu) ? kVinylsAltCamera : kVinylsCamera;
     return menu;
 }
 

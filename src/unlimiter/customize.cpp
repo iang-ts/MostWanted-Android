@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -84,6 +85,112 @@ struct Chosen {
 
 constexpr uint32_t kVinylCustomMenu = kMenuVinylCustom, kVinylCustomGroup = 31, kVinylIcon = 0x55778E5A;
 constexpr uint32_t kGroupLocal = 0x14, kVinylFlagLocal = 0x0D;
+
+struct VinylGroup {
+    int index = 0;
+    uint32_t title = 0, icon = 0;
+    bool alt_camera = true;
+};
+
+struct VinylShown {
+    uint32_t menu = 0, icon = 0, title = 0;
+    int index = 0;
+    int position = 0;
+};
+
+const VinylGroup* kVinylDefaults() {
+    static const VinylGroup list[] = {
+        {31, 0, 0, true}, {0, 0, 0, false}, {1, 0, 0, true}, {2, 0, 0, true}, {3, 0, 0, false},
+        {4, 0, 0, true},  {5, 0, 0, true},  {6, 0, 0, true}, {7, 0, 0, true}, {8, 0, 0, true},
+    };
+    return list;
+}
+
+const char* const kVinylStrings[] = {"CO_VINYL_CUSTOM", "CO_VINYL_FLAME",     "CO_VINYL_TRIBAL", "CO_VINYL_STRIPE",
+                                     "CO_VINYL_RACE_FLAG", "CO_VINYL_NATIONAL_FLAG", "CO_VINYL_BODY", "CO_VINYL_UNIQUE",
+                                     "CO_VINYL_CONTEST", "CO_VINYL_SPECIAL"};
+const char* const kVinylTextures[] = {"VINYL_GROUP_CUSTOM", "VINYL_GROUP_FLAMES", "VINYL_GROUP_TRIBAL",
+                                      "VINYL_GROUP_STRIPES", "VINYL_GROUP_RACING_FLAG", "VINYL_GROUP_NATIONAL_FLAG",
+                                      "VINYL_GROUP_BODY", "VINYL_GROUP_UNIQUE", "VINYL_GROUP_CONTEST",
+                                      "VINYL_GROUP_SPECIAL"};
+
+VinylGroup DefaultVinyl(int i) {
+    VinylGroup g = kVinylDefaults()[i];
+    g.title = BinHash(kVinylStrings[i]);
+    g.icon = BinHash(kVinylTextures[i]);
+    return g;
+}
+
+int DefaultVinylSlot(int index) {
+    for (int i = 0; i <= 9; i++)
+        if (kVinylDefaults()[i].index == index) return i;
+    return 1;
+}
+
+void UpsertVinyl(std::vector<VinylGroup>& out, const VinylGroup& g) {
+    for (VinylGroup& have : out)
+        if (have.index == g.index) {
+            have = g;
+            return;
+        }
+    if (out.size() < kMaxVinylGroups) out.push_back(g);
+}
+
+VinylGroup ReadVinyl(const Ini& ini, const std::string& section, const VinylGroup& fallback, bool folder) {
+    VinylGroup g = fallback;
+    if (ini.Has(section, "Index")) g.index = ini.Int(section, "Index", g.index);
+    if (g.index < 0 || g.index > 31) g.index = fallback.index;
+    if (ini.Has(section, "String")) g.title = ini.Hash(section, "String", g.title);
+    if (ini.Has(section, "Texture")) g.icon = ini.Hash(section, "Texture", g.icon);
+    int alt = folder ? 1 : (fallback.alt_camera ? 1 : 0);
+    g.alt_camera = ini.Int(section, "UseAltCamera", alt) != 0;
+    if (!g.title) g.title = fallback.title;
+    if (!g.icon) g.icon = fallback.icon;
+    return g;
+}
+
+const std::vector<VinylGroup>& VinylGroups() {
+    static const std::vector<VinylGroup> groups = [] {
+        std::vector<VinylGroup> out;
+        const Ini& ini = Data("_VinylGroups.ini");
+        int count = ini.Int("VinylGroups", "NumberOfVinylGroups", 9);
+        if (count < 0) count = 0;
+        if (count > int(kMaxVinylGroups) - 1) count = int(kMaxVinylGroups) - 1;
+        char section[16];
+        for (int i = 0; i <= count; i++) {
+            std::snprintf(section, sizeof section, "Group%d", i);
+            VinylGroup fallback = i <= 9 ? DefaultVinyl(i) : DefaultVinyl(1);
+            UpsertVinyl(out, ini.Has(section, "Index") || ini.Has(section, "String") ? ReadVinyl(ini, section, fallback, false)
+                                                                                      : fallback);
+        }
+        for (const Ini& file : Folder("VinylGroups")) {
+            if (!file.Has("Group", "Index")) continue;
+            int index = file.Int("Group", "Index", -1);
+            if (index < 0 || index > 31) continue;
+            VinylGroup fallback = DefaultVinyl(DefaultVinylSlot(index));
+            fallback.index = index;
+            UpsertVinyl(out, ReadVinyl(file, "Group", fallback, true));
+        }
+        LOGR("unlimiter: %zu vinyl groups", out.size());
+        return out;
+    }();
+    return groups;
+}
+
+std::vector<VinylShown> g_shown;
+bool g_vinyl_setup = false;
+
+uint32_t MenuOfVinyl(int index) {
+    if (index == int(kVinylCustomGroup)) return kVinylCustomMenu;
+    if (index >= 0 && index < int(kMenuVinylStockCount)) return kMenuVinylStockFirst + uint32_t(index);
+    return kMenuVinylExtra + uint32_t(std::max(0, index - int(kMenuVinylStockCount)));
+}
+
+const VinylShown* ShownVinyl(uint32_t menu) {
+    for (const VinylShown& s : g_shown)
+        if (s.menu == menu) return &s;
+    return nullptr;
+}
 
 bool HasVinylGroup(X86Context& ctx, uint32_t type, uint32_t group) {
     uint32_t prev = 0;
@@ -172,21 +279,31 @@ void AddParts(X86Context& ctx, uint32_t screen) {
 
 void AddVinylGroups(X86Context& ctx, uint32_t screen) {
     uint32_t type = CurrentCarType(ctx);
-    if (type == 0xFFFFFFFF || !Config(type).visual.vinyls_custom) return;
-    bool found = HasVinylGroup(ctx, type, kVinylCustomGroup);
-    LOGR("unlimiter: custom vinyls of %s %s", CarTypeName(type).c_str(), found ? "found" : "not found");
-    if (!found) return;
-    const Ini& groups = Data("_VinylGroups.ini");
-    uint32_t icon = IconOf(ctx, type, "VisualVinylsCustom", groups.Hash("Group0", "Texture", kVinylIcon));
-    if (!TextureExists(ctx, icon)) icon = kVinylIcon;
-    uint32_t title = groups.Hash("Group0", "String", BinHash("CO_VINYL_CUSTOM"));
-    if (title == 0xFFFFFFFF) title = BinHash("CO_VINYL_CUSTOM");
-    title = NameOf(ctx, type, "VisualVinylsCustom", title);
+    g_shown.clear();
+    if (type == 0xFFFFFFFF) return;
+    const CarConfig& config = Config(type);
+    bool custom = config.visual.vinyls_custom && HasVinylGroup(ctx, type, kVinylCustomGroup);
+    LOGR("unlimiter: custom vinyls of %s %s", CarTypeName(type).c_str(), custom ? "found" : "not found");
     static const char* const kText[kLanguageCount] = {"CUSTOM",         "PERSONNALISES",  "EIGENE", "PERSONALIZZATI",
                                                       "PERSONALIZADOS", "Personalizados", "KUSTOM"};
-    Label(ctx, title, kText[LanguageIndex(ctx)]);
-    Add(ctx, screen, kVinylCustomMenu, kSlotVinylLayer0, icon, title);
-    g.by_menu[kVinylCustomMenu - kOwnMenuFirst].group = int(kVinylCustomGroup);
+    for (const VinylGroup& group : VinylGroups()) {
+        if (group.index == int(kVinylCustomGroup) && !custom) continue;
+        uint32_t icon = group.icon, title = group.title;
+        if (group.index == int(kVinylCustomGroup)) {
+            icon = IconOf(ctx, type, "VisualVinylsCustom", icon ? icon : kVinylIcon);
+            title = NameOf(ctx, type, "VisualVinylsCustom", title ? title : BinHash("CO_VINYL_CUSTOM"));
+            Label(ctx, title, kText[LanguageIndex(ctx)]);
+        }
+        if (!icon || !TextureExists(ctx, icon)) icon = kVinylIcon;
+        if (!title) title = BinHash("CO_VINYL_CUSTOM");
+        uint32_t menu = MenuOfVinyl(group.index);
+        AddOwnOption(ctx, screen, kernel::R32(kPartsPackage), icon, title, menu);
+        if (menu == kVinylCustomMenu) {
+            g.by_menu[kVinylCustomMenu - kOwnMenuFirst] = {kSlotVinylLayer0, icon, title, group.index};
+            g.set[kVinylCustomMenu - kOwnMenuFirst] = true;
+        }
+        g_shown.push_back({menu, icon, title, group.index, int(OptionCount())});
+    }
 }
 
 void AddVisual(X86Context& ctx, uint32_t screen) {
@@ -205,6 +322,9 @@ struct Stock {
 
 Stock StockMenu(const CarConfig& c, uint32_t menu, uint32_t icon) {
     if (OwnRimBrands() && menu >= kMenuRimBrandFirst && menu <= kMenuRimBrandLast) return {false, nullptr};
+    // the game adds 0x402 to 0x409 itself; the ini's list replaces them. 0x401 is the return-to-stock option
+    if (!VinylGroups().empty() && menu >= kMenuVinylStockFirst && menu < kMenuVinylStockFirst + kMenuVinylStockCount)
+        return {false, nullptr};
     switch (menu) {
         case kMenuCategoryParts: return {c.category.parts, "Parts"};
         case kMenuCategoryPerformance: return {c.category.performance, "Performance"};
@@ -239,6 +359,30 @@ Stock StockMenu(const CarConfig& c, uint32_t menu, uint32_t icon) {
 }
 
 }  // namespace
+
+bool VinylGroupMenu(uint32_t menu) { return ShownVinyl(menu) != nullptr; }
+
+int VinylGroupIndex(uint32_t menu) {
+    const VinylShown* s = ShownVinyl(menu);
+    return s ? s->index : -1;
+}
+
+bool VinylAltCamera(uint32_t menu) {
+    int index = VinylGroupIndex(menu);
+    if (index < 0 && menu >= kMenuVinylStockFirst && menu < kMenuVinylStockFirst + kMenuVinylStockCount)
+        index = int(menu - kMenuVinylStockFirst);
+    if (index < 0) return false;
+    for (const VinylGroup& g : VinylGroups())
+        if (g.index == index) return g.alt_camera;
+    return DefaultVinyl(DefaultVinylSlot(index)).alt_camera;
+}
+
+int VinylOption(int group) {
+    if (!g_vinyl_setup) return 0;
+    for (const VinylShown& s : g_shown)
+        if (s.index == group) return s.position;
+    return 1;
+}
 
 uint32_t AddOwnOption(X86Context& ctx, uint32_t screen, uint32_t package, uint32_t icon, uint32_t title, uint32_t menu) {
     bool filtering = g_filtering;
@@ -328,13 +472,16 @@ X86_EXTERN_FUNC(__imp__sub_002ABC20);
 X86_FUNC(sub_002ABC20) {
     uint32_t screen = ctx.ecx;
     bool active = unlimiter::Active() && unlimiter::Ready();
+    unlimiter::g_vinyl_setup = active;
     if (active) unlimiter::BeginOptions(screen);
     __imp__sub_002ABC20(ctx, base);
+    unlimiter::g_vinyl_setup = false;
     if (!active) return;
     unlimiter::EndOptions(screen);
     uint32_t previous = kernel::R32(screen + unlimiter::kScreenPreviousMenu);
     bool stock = previous >= unlimiter::kMenuVinylGroupFirst && previous <= unlimiter::kMenuVinylGroupLast;
-    if (stock || previous == unlimiter::kVinylCustomMenu)
+    bool extra = previous >= unlimiter::kMenuVinylExtra && previous < unlimiter::kMenuVinylExtra + unlimiter::kMaxVinylGroups;
+    if (stock || extra || previous == unlimiter::kVinylCustomMenu)
         kernel::W32(screen + unlimiter::kScreenPreviousMenu, unlimiter::kMenuCategoryVisual);
 }
 
@@ -363,6 +510,16 @@ X86_FUNC(sub_00297690) {
 void UnlimiterPartsSlot(X86Context& ctx, uint8_t*) {
     if (!unlimiter::Active()) return;
     uint32_t menu = kernel::R32(ctx.edi + unlimiter::kScreenMenu);
+    if (const unlimiter::VinylShown* vinyl = unlimiter::ShownVinyl(menu)) {
+        if (menu == unlimiter::kVinylCustomMenu || menu >= unlimiter::kMenuVinylExtra) {
+            ctx.esi = unlimiter::kSlotVinylLayer0;
+            ctx.ebx = vinyl->icon;
+            kernel::W32(ctx.edi + unlimiter::kPartsTitle, vinyl->title);
+            kernel::W32(ctx.ebp - unlimiter::kGroupLocal, uint32_t(vinyl->index));
+            *static_cast<uint8_t*>(kernel::HostPtr(ctx.ebp - unlimiter::kVinylFlagLocal)) = 1;
+        }
+        return;
+    }
     uint32_t index = menu - unlimiter::kOwnMenuFirst;
     if (index >= unlimiter::kOwnMenus || !unlimiter::g.set[index]) return;
     const unlimiter::Chosen& c = unlimiter::g.by_menu[index];
@@ -373,4 +530,17 @@ void UnlimiterPartsSlot(X86Context& ctx, uint8_t*) {
         kernel::W32(ctx.ebp - unlimiter::kGroupLocal, uint32_t(c.group));
         *static_cast<uint8_t*>(kernel::HostPtr(ctx.ebp - unlimiter::kVinylFlagLocal)) = 1;
     }
+}
+
+X86_EXTERN_FUNC(__imp__sub_00297C60);
+X86_FUNC(sub_00297C60) {
+    if (unlimiter::g_vinyl_setup) {
+        int position = unlimiter::VinylOption(int(kernel::R32(ctx.esp + 4)));
+        if (position > 0) {
+            ctx.eax = uint32_t(position);
+            ctx.esp += 8;
+            return;
+        }
+    }
+    __imp__sub_00297C60(ctx, base);
 }

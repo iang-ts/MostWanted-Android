@@ -218,5 +218,11 @@ X86_FUNC(sub_00296FA0) {
         ctx.esp += 4;
         return;
     }
+    if (unlimiter::Active() && (menu == unlimiter::kMenuVinylCustom ||
+                               (menu >= unlimiter::kMenuVinylExtra && menu < unlimiter::kMenuVinylExtra + unlimiter::kMaxVinylGroups))) {
+        ctx.eax = unlimiter::kVinylCategory;
+        ctx.esp += 4;
+        return;
+    }
     __imp__sub_00296FA0(ctx, base);
 }

@@ -502,6 +502,10 @@ X86_EXTERN_FUNC(__imp__sub_0024FA00);
 X86_FUNC(sub_0024FA00) {
     uint32_t ret = kernel::R32(ctx.esp), part = ctx.ecx, key = kernel::R32(ctx.esp + 4), screen = ctx.edi;
     __imp__sub_0024FA00(ctx, base);
+    if (unlimiter::ForceVinylColourBrand(ret, part, key)) {
+        ctx.eax = ctx.ebx;
+        return;
+    }
     if (ret != unlimiter::kListRadius || key != unlimiter::kInnerRadius || !unlimiter::On()) return;
     int32_t size = int32_t(kernel::R32(screen + unlimiter::kRimSize));
     static const uint32_t kRear = unlimiter::BinHash("REAR");

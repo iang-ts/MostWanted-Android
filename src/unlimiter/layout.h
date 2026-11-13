@@ -123,6 +123,11 @@ inline constexpr uint32_t kScreenPreviousMenu = 0x150;
 inline constexpr uint32_t kOwnMenuFirst = 0x100, kOwnMenus = 0x20;
 inline constexpr uint32_t kPartNamePair = 0x4D3FD0;
 inline constexpr uint32_t kMenuVinylGroupFirst = 0x401, kMenuVinylGroupLast = 0x409;
+// the game's parts setup gives 0x402 to 0x409 the group index menu - 0x402. A group past those, and the custom
+// group, is a menu of ours
+inline constexpr uint32_t kMenuVinylStockFirst = 0x402, kMenuVinylStockCount = 8;
+inline constexpr uint32_t kMenuVinylExtra = 0x40A, kMaxVinylGroups = 32, kMaxPaintGroups = 64;
+inline constexpr uint32_t kVinylCategory = 0x0E;
 inline constexpr uint32_t kMenuInterior = 0x106, kMenuRoof = 0x107, kMenuBrakeParts = 0x108, kMenuHeadlights = 0x109,
                           kMenuTaillights = 0x10A, kMenuMirrors = 0x10B, kMenuAttachments = 0x10C,
                           kMenuAttachmentFirst = 0x10D;

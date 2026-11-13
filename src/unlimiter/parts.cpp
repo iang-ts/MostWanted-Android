@@ -154,8 +154,11 @@ int LanguageIndex(X86Context& ctx) {
 
 bool IsOwnMenu(uint32_t menu) {
     return menu - kOwnMenuFirst < kOwnMenus || menu == kMenuRimBrandOwn ||
-           menu - kMenuRimBrandExtra < kMaxRimBrands - kStockRimBrands;
+           menu - kMenuRimBrandExtra < kMaxRimBrands - kStockRimBrands ||
+           menu - kMenuVinylExtra < kMaxVinylGroups - kMenuVinylStockCount;
 }
+
+uint32_t OptionCount() { return g_options.screen ? uint32_t(g_options.menus.size()) : 0; }
 
 void BeginOptions(uint32_t screen) {
     g_options = ScreenOptions{};
