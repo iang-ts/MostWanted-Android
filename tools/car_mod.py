@@ -1657,6 +1657,7 @@ MEMBERS = {
     "X": 0, "Y": 4, "Z": 8, "W": 12,
     "DegPerG": 0, "DegPerSec": 4, "MaxG": 8,
     "Class": 0, "Collection": 4,
+    "Cost": 8,
 }
 
 

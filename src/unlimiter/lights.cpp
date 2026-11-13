@@ -178,7 +178,11 @@ X86_EXTERN_FUNC(__imp__sub_00258640);
 X86_FUNC(sub_00258640) {
     uint32_t info = kernel::R32(ctx.esp + 4), ride = kernel::R32(ctx.esp + 8);
     __imp__sub_00258640(ctx, base);
-    if (unlimiter::Replacing() && ride && mem::IsCommitted(ride)) unlimiter::MoreUsedTextures(info, ride);
+    if (!unlimiter::Active() || !unlimiter::Ready() || !ride || !mem::IsCommitted(ride)) return;
+    uint32_t result = ctx.eax;
+    unlimiter::RearWheelTextures(ctx, info, ride);
+    if (unlimiter::Replacing()) unlimiter::MoreUsedTextures(info, ride);
+    ctx.eax = result;
 }
 
 // CarRenderInfo::UpdateLightStateTextures (thiscall, from the render at 0x25578A)

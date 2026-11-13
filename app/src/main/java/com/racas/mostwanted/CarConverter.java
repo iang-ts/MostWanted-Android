@@ -2710,8 +2710,8 @@ final class CarConverter {
 
     private static final Map<String, Integer> MEMBERS = new HashMap<>();
     static {
-        String[] names = {"Front", "Rear", "X", "Y", "Z", "W", "DegPerG", "DegPerSec", "MaxG", "Class", "Collection"};
-        int[] at = {0, 4, 0, 4, 8, 12, 0, 4, 8, 0, 4};
+        String[] names = {"Front", "Rear", "X", "Y", "Z", "W", "DegPerG", "DegPerSec", "MaxG", "Class", "Collection", "Cost"};
+        int[] at = {0, 4, 0, 4, 8, 12, 0, 4, 8, 0, 4, 8};
         for (int i = 0; i < names.length; i++) MEMBERS.put(names[i], at[i]);
     }
 

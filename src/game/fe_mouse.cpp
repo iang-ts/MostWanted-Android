@@ -291,8 +291,9 @@ void FeFrame() {
             else found = {};
         }
     }
-    // cinematic mode hides the pause menu under its camera: no menu then, the touch controls the camera's
-    if (CinematicActive() || ReplayActive()) menu = prompted = 0;
+    // cinematic mode hides the pause menu under its camera, the garage's free camera its menus: no menu then, the touch
+    // controls the camera's
+    if (CinematicActive() || ReplayActive() || GarageCameraActive()) menu = prompted = 0;
     int frames = g_mouse_frames;
     if (g_down) frames = kMouseFrames;
     else if (frames > 0) frames--;
@@ -383,6 +384,8 @@ bool GarageRotates() { return SteadyMs() - g_rotate_ms.load() < kRotateHold; }
 
 X86_EXTERN_FUNC(__imp__sub_00294210);
 X86_FUNC(sub_00294210) {
-    if (kernel::G<uint8_t>(ctx.ecx + 0x84)) game::NoteGarageRotates();
+    uint32_t screen = ctx.ecx;
+    if (kernel::G<uint8_t>(screen + 0x84)) game::NoteGarageRotates();
     __imp__sub_00294210(ctx, base);
+    game::GarageCameraTick(ctx, screen);
 }

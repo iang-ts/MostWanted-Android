@@ -42,7 +42,7 @@ struct CarConfig {
     } visual;
     struct {
         std::map<uint32_t, uint32_t> by_menu;  // a menu's frontend camera node, as an Attrib key
-        uint32_t rim_brand = 0, vinyl_group = 0;
+        uint32_t rim_brand = 0, rim_brand_rear = 0, rim_brand_all = 0, vinyl_group = 0;
     } cameras;
 };
 
@@ -81,6 +81,11 @@ uint32_t CarHash(uint32_t car_type, const char* section, const char* key, uint32
 uint32_t CarTextHash(uint32_t car_type, const char* section, const char* key, const char* fallback);
 
 bool OwnRimBrands();
+bool NoRimSize(uint32_t menu);
+int RimsMode();
+uint32_t WheelCartTitle(uint32_t slot);
+void RearWheelTextures(X86Context& ctx, uint32_t info, uint32_t ride);
+uint32_t SpinnerTexture(X86Context& ctx, uint32_t hash);
 
 void Frame(X86Context& ctx);
 void ExpandPools();

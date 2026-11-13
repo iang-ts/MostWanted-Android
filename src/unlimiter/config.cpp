@@ -33,8 +33,8 @@ bool On(const Ini& ini, const char* section, const char* key, bool fallback) {
     return ini.Int(section, key, fallback ? 1 : 0) != 0;
 }
 
-// [Cameras]: a frontend camera node's name for a menu, over the one its screen node names. Rear and all rims
-// (PartsRimsBrandRear/All) and the decal slots by place wait for the menus that pick them
+// [Cameras]: a frontend camera node's name for a menu, over the one its screen node names. The decal slots by place wait
+// for the menu that picks them
 uint32_t CameraKey(const Ini& ini, const char* key) {
     std::string name = ini.Text("Cameras", key);
     return name.empty() ? 0 : VltHash(name);
@@ -69,6 +69,8 @@ void ReadCameras(const Ini& ini, CarConfig& c) {
         if (uint32_t camera = CameraKey(ini, key.c_str())) cams.by_menu[kMenuAttachmentFirst + i] = camera;
     }
     cams.rim_brand = CameraKey(ini, "PartsRimsBrand");
+    cams.rim_brand_rear = CameraKey(ini, "PartsRimsBrandRear");
+    cams.rim_brand_all = CameraKey(ini, "PartsRimsBrandAll");
     cams.vinyl_group = CameraKey(ini, "VisualVinylsGroup");
 }
 

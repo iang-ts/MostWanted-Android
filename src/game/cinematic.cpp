@@ -983,10 +983,11 @@ X86_FUNC(sub_000D8720) {
 // 0x0D84C2) binds the frame with the world's depth surface again, and the next frame's first clear (colour and depth)
 // clears what is bound: skipped whole, the depth was never cleared, and once the camera moved the world failed the
 // depth test against the last frame's and the sky showed through, black below the horizon. FEng draws only while the
-// dword at 0x427A74 (read only at 0x0D85EC, never written) is set. The replay hides them the same way
+// dword at 0x427A74 (read only at 0x0D85EC, never written) is set. The replay and the garage's free camera hide them
+// the same way
 X86_EXTERN_FUNC(__imp__sub_000D82D0);
 X86_FUNC(sub_000D82D0) {
-    if (!game::g_active && !game::ReplayActive()) return __imp__sub_000D82D0(ctx, base);
+    if (!game::g_active && !game::ReplayActive() && !game::GarageCameraActive()) return __imp__sub_000D82D0(ctx, base);
     constexpr uint32_t kDrawFEng = 0x427A74;
     uint32_t draw = kernel::R32(kDrawFEng);
     kernel::W32(kDrawFEng, 0);

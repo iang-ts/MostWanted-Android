@@ -23,6 +23,7 @@ constexpr uint32_t kRimsCategory = 0x0B;
 struct Brand {
     uint32_t hash, icon, title;
     std::string sort_name;
+    bool no_rim_size;
 };
 
 std::vector<Brand> LoadBrands() {
@@ -33,7 +34,8 @@ std::vector<Brand> LoadBrands() {
     auto add = [&](const Ini& from, const std::string& section, const std::string& sort_name) {
         if (!from.Has(section, "BrandName")) return;
         std::string name = from.Text(section, "BrandName");
-        Brand b{BinHash(name), from.Hash(section, "Texture", kRimsIcon), from.Hash(section, "String", 0), sort_name};
+        Brand b{BinHash(name), from.Hash(section, "Texture", kRimsIcon), from.Hash(section, "String", 0), sort_name,
+                from.Int(section, "NoRimSize", 0) != 0};
         for (Brand& have : out)
             if (have.hash == b.hash) {
                 have = b;
@@ -131,6 +133,18 @@ bool OwnBrandMenu(uint32_t menu) {
 }  // namespace
 
 bool OwnRimBrands() { return g_own_brands; }
+
+// a brand that lists every rim size together (NoRimSize): the car's own rims unless _RimBrands.ini's Brand0 or the
+// custom brand's file says otherwise
+bool NoRimSize(uint32_t menu) {
+    if (!Active() || !Ready()) return false;
+    if (menu == kMenuRimBrandOwn) {
+        if (const Brand* entry = CustomBrandEntry()) return entry->no_rim_size;
+        return Data("_RimBrands.ini").Int("Brand0", "NoRimSize", 1) != 0;
+    }
+    int index = Brands().empty() ? -1 : BrandOfMenu(menu);
+    return index >= 0 && size_t(index) < Brands().size() && Brands()[size_t(index)].no_rim_size;
+}
 
 }  // namespace unlimiter
 

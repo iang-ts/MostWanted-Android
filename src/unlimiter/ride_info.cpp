@@ -77,10 +77,34 @@ void Pair(X86Context& ctx, uint32_t ride, uint32_t slot, uint32_t part) {
         }
         return;
     }
-    if (slot == kSlotFrontWheel && part && Global().separate_rims) {
-        uint32_t rear = FindPart(ctx, type, kSlotRearWheel, HashFrom("_REAR", kernel::R32(part + kPartNameHash)));
-        if (rear) PutPart(ride, kSlotRearWheel, rear);
-    }
+}
+
+// a rim's own rear (<rim>_REAR), as the PC's RideInfo::SetPart for REAR_WHEEL; 0 for none
+uint32_t RearOf(X86Context& ctx, uint32_t type, uint32_t part) {
+    return part ? FindPart(ctx, type, kSlotRearWheel, HashFrom("_REAR", kernel::R32(part + kPartNameHash))) : 0;
+}
+
+// the rear wheels follow the front while they have none of their own, or the front's: an empty REAR_WHEEL draws the
+// front's models, its _REAR is put there. A ride written from a record sets the rear after the front
+void FollowFront(X86Context& ctx, uint32_t ride, uint32_t before) {
+    uint32_t type = kernel::R32(ride + kRideCarType), rear = PartAt(ride, kSlotRearWheel);
+    if (rear && rear != before && rear != RearOf(ctx, type, before)) return;
+    PutPart(ride, kSlotRearWheel, RearOf(ctx, type, PartAt(ride, kSlotFrontWheel)));
+}
+
+// the game's SetPart (0x25D650) leaves REAR_WHEEL as it is, it only answers what is there: the rear is put here, a
+// rim's own _REAR for it, and none follows the front. As the game's, the parts are enabled again after (0x2585D0)
+constexpr uint32_t kEnableParts = 0x2585D0;
+
+void SetRear(X86Context& ctx, uint32_t ride, uint32_t part, bool update) {
+    uint32_t type = kernel::R32(ride + kRideCarType);
+    uint32_t rear = part ? RearOf(ctx, type, part) : RearOf(ctx, type, PartAt(ride, kSlotFrontWheel));
+    PutPart(ride, kSlotRearWheel, part && !rear ? part : rear);
+    if (!update) return;
+    X86Context saved = ctx;
+    ctx.ecx = ride;
+    kernel::CallGuest(ctx, kEnableParts, {});
+    ctx = saved;
 }
 
 struct StockKey {
@@ -162,10 +186,15 @@ void StockParts(X86Context& ctx, uint32_t ride) {
 X86_EXTERN_FUNC(__imp__sub_0025D650);
 X86_FUNC(sub_0025D650) {
     uint32_t ride = ctx.ecx, slot = kernel::R32(ctx.esp + 4), part = kernel::R32(ctx.esp + 8);
+    bool update = kernel::G<uint8_t>(ctx.esp + 12) != 0;
+    bool on = unlimiter::Active() && unlimiter::Ready() && slot < unlimiter::kSlotCount;
+    uint32_t front_before = on && slot == unlimiter::kSlotFrontWheel ? unlimiter::PartAt(ride, slot) : 0;
     __imp__sub_0025D650(ctx, base);
-    if (!unlimiter::Active() || !unlimiter::Ready() || slot >= unlimiter::kSlotCount) return;
+    if (!on) return;
     uint32_t result = ctx.eax;
     unlimiter::Pair(ctx, ride, slot, part);
+    if (slot == unlimiter::kSlotFrontWheel) unlimiter::FollowFront(ctx, ride, front_before);
+    if (slot == unlimiter::kSlotRearWheel) unlimiter::SetRear(ctx, ride, part, update);
     ctx.eax = result;
 }
 

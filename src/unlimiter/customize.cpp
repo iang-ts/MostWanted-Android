@@ -354,7 +354,9 @@ X86_EXTERN_FUNC(__imp__sub_00297690);
 X86_FUNC(sub_00297690) {
     uint32_t slot = kernel::R32(ctx.esp + 4);
     __imp__sub_00297690(ctx, base);
-    if (ctx.eax || !unlimiter::Active() || slot >= unlimiter::kSlotCount) return;
+    if (!unlimiter::Active() || slot >= unlimiter::kSlotCount) return;
+    if (uint32_t wheels = unlimiter::WheelCartTitle(slot)) ctx.eax = wheels;
+    if (ctx.eax) return;
     if (uint32_t title = unlimiter::g.slot_title[slot]) ctx.eax = title;
 }
 

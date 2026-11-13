@@ -97,6 +97,21 @@ bool CinematicClean();  // on, its menu hidden or its path playing: the picture 
 bool CinematicPad(int port, const input::Pad& pad);  // the pad filter: true while the camera has the pad
 void DrawCinematicHud();                             // inside the ImGui frame: its menu, Start shows and hides it
 bool CinematicMenuHit(float x, float y);             // screen pixels on its menu: the touch controls leave them
+// the garage's FREE CAMERA (src/game/garage_camera.cpp): the car turned and zoomed by touch or the right stick and the
+// triggers, the menus hidden
+bool GarageCameraAvailable();  // any thread: a garage's or a shop's camera is up (its tick ran lately)
+bool GarageCameraActive();     // any thread: the free camera is on
+void ToggleGarageCamera();     // any thread: on, or off and back to the menu's view
+bool GarageCameraPad(int port, const input::Pad& pad);   // the pad filter: true while the camera has the pad
+void GarageCameraTick(X86Context& ctx, uint32_t screen);  // game thread, after the garage's HandleJoyEvents
+// the ORBIT CAMERA (src/game/orbit_camera.cpp): roaming the city, the game's camera turned about the car and brought in
+// or out
+bool OrbitCameraAvailable();  // any thread: free roam under the player's camera, no cinematic mode or replay
+bool OrbitCameraActive();
+void ToggleOrbitCamera();                    // any thread: on, or off and the game's camera back
+void OrbitCameraTurn(float dx, float dy);    // any thread: a drag, in screen heights
+void OrbitCameraZoom(float ratio);           // any thread: a pinch's span over its last, above 1 brings it in
+void OrbitCameraPad(int port, input::Pad& pad);  // the pad filter: orbiting, the right stick is the camera's
 // the replay (src/game/replay.cpp): the race recorded as it runs, played again from the pause menu's icon or the results
 void ReplayRequest(bool from_pause_menu = false);  // from the menu: leaving opens the pause menu again
 bool ReplayActive();

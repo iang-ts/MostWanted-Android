@@ -1104,6 +1104,10 @@ void OptionsBindingFrame(X86Context& ctx) {
 
 using namespace game;
 
+namespace unlimiter {
+uint32_t SpinnerTexture(X86Context& ctx, uint32_t hash);  // src/unlimiter/rims.cpp
+}
+
 // GetTextureInfo(hash, default, unloaded), cdecl: our icons' hashes get our textures
 X86_EXTERN_FUNC(__imp__sub_000C5900);
 X86_FUNC(sub_000C5900) {
@@ -1115,6 +1119,11 @@ X86_FUNC(sub_000C5900) {
     }
     if (uint32_t added = game::AddedTexture(ctx, hash)) {
         ctx.eax = added;
+        ctx.esp += 4;
+        return;
+    }
+    if (uint32_t spinner = unlimiter::SpinnerTexture(ctx, hash)) {
+        ctx.eax = spinner;
         ctx.esp += 4;
         return;
     }

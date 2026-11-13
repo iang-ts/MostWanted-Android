@@ -396,13 +396,15 @@ using input::NowMs;
 
 // what a finger on the screen does
 // FeTap: a finger in a menu prompting the right stick, FEng's pointer not given yet: a tap or the stick
-enum class Role : uint8_t { None, Stick, Look, Button, Drag, Pinch, FeMouse, Wheel, HudDrag, FeTap };
+// Zoom: one of the two fingers pinching the garage's free camera or the orbit camera; Orbit: a finger turning the
+// orbit camera (game::OrbitCameraActive) about the car
+enum class Role : uint8_t { None, Stick, Look, Button, Drag, Pinch, FeMouse, Wheel, HudDrag, FeTap, Zoom, Orbit };
 
 // a control of the touch layout: what it shows and presses, on the controller (analog 0-7, button bits from 8) or on
 // the host. Where it sits is the layout's, which the player edits
-enum : int { kResetCar = -6, kSteerWheel = -5, kSteerRight = -4, kSteerLeft = -3, kPanel = -1, kAnalogA = 0, kAnalogB = 1, kAnalogX = 2, kAnalogY = 3, kAnalogLT = 6, kAnalogRT = 7 };
+enum : int { kFreeCamera = -7, kResetCar = -6, kSteerWheel = -5, kSteerRight = -4, kSteerLeft = -3, kPanel = -1, kAnalogA = 0, kAnalogB = 1, kAnalogX = 2, kAnalogY = 3, kAnalogLT = 6, kAnalogRT = 7 };
 constexpr int kBit = 8;  // kBit + n: buttons bit n (dpad up down left right, start, back, left thumb, right thumb)
-enum class Icon : uint8_t { Text, Pause, Gear, Back, Gyro, Up, Down, Left, Right, Wheel };
+enum class Icon : uint8_t { Text, Pause, Gear, Back, Gyro, Up, Down, Left, Right, Wheel, Camera };
 // how a control is drawn and touched: a circle, a shoulder's tab, a small pill, the dpad's rounded square, a racing
 // game's tall pedal (the triggers). Its place's r is a circle's radius, the others' half height
 enum class Shape : uint8_t { Round, Tab, Pill, Square, Pedal };
@@ -441,6 +443,9 @@ constexpr Button kButtons[] = {
     {"wheel", "Wheel", Icon::Wheel, kSteerWheel, Shape::Round},
     // the player's car put back on the road (src/game/game.cpp's ResetCarFrame): the console has no button for it
     {"reset_car", "RESET", Icon::Text, kResetCar, Shape::Round},
+    // the free camera, on and off: in the garage and the shops src/game/garage_camera.cpp's, in a race
+    // src/game/orbit_camera.cpp's about the car
+    {"free_cam", "Free camera", Icon::Camera, kFreeCamera, Shape::Round},
 };
 constexpr size_t kButtonCount = std::size(kButtons);
 constexpr size_t kStick = kButtonCount;  // the sticks' places, after the buttons'
@@ -475,6 +480,7 @@ constexpr Layout kRacing = {{
     {0.585f, 0.075f, 0.036f}, {0.415f, 0.075f, 0.036f}, {0.50f, 0.075f, 0.045f},
     {0.07f, 0.28f, 0.038f}, {0.07f, 0.46f, 0.038f}, {0.03f, 0.37f, 0.038f}, {0.11f, 0.37f, 0.038f},
     {0.08f, 0.76f, 0.11f}, {0.25f, 0.76f, 0.11f}, {0.15f, 0.70f, 0.19f}, {0.33f, 0.075f, 0.036f},
+    {0.93f, 0.25f, 0.045f},
     {0.17f, 0.76f, 0.12f, true}, {0.55f, 0.80f, 0.10f},
 }};
 
@@ -497,6 +503,10 @@ std::vector<Finger> g_fingers;
 bool g_pressed[kButtonCount] = {};
 float g_stick_x = 0, g_stick_y = 0;  // -1 to 1, y up
 float g_rstick_x = 0, g_rstick_y = 0;  // the right stick, a drag on the right of the screen
+// the free camera's pinch: the span between its two fingers when it began and at their last move, pixels, and its
+// zoom, -1 (out) to 1 (in): as the stick turns the car, the pinch held open or closed zooms on
+float g_zoom_from = 0, g_zoom_span = 0, g_zoom = 0;
+constexpr float kZoomReach = 0.25f;  // the span's change, in screen heights, for a full zoom
 std::atomic<uint64_t> g_touch_ms{0};
 std::atomic<uint64_t> g_back_until{0};  // the back key's tap of Start or B lasts until then
 constexpr uint64_t kBackTapMs = 120;
@@ -740,10 +750,18 @@ bool SteeringShown(int press) {
     return true;
 }
 
+// the garage's free camera: its button wherever a garage's camera is up, and with it on, the settings gear beside it
+bool FreeCamera() { return !g_editing && game::GarageCameraActive(); }
+// the orbit camera in a race: the car is still driven, the touches off the controls turn and zoom the camera
+bool Orbit() { return !g_editing && game::OrbitCameraActive(); }
+
 bool ButtonShown(size_t i) {
     const Button& b = kButtons[i];
     if (!SteeringShown(b.press)) return false;
     if (g_editing) return MenuPreview() ? FeFace(i) || FeDpad(i) : true;
+    if (b.press == kFreeCamera)
+        return !g_layout[i].hidden && (game::GarageCameraAvailable() || (game::OrbitCameraAvailable() && !FeMenu()));
+    if (FreeCamera()) return b.keep;
     if (FeFace(i) || FeDpad(i)) return true;
     if (g_layout[i].hidden) return false;
     if (FeMenu()) return b.keep;  // the settings gear alone
@@ -960,6 +978,23 @@ void StickOf(const Finger& f, float& x, float& y, size_t stick = kStick) {
 
 void UpdateStick(const Finger& f) { StickOf(f, g_stick_x, g_stick_y); }
 
+void Pinch() {
+    const Finger* two[2] = {};
+    int n = 0;
+    for (const Finger& f : g_fingers)
+        if (f.role == Role::Zoom && n < 2) two[n++] = &f;
+    if (n < 2) return;
+    float span = std::hypot(two[0]->x - two[1]->x, two[0]->y - two[1]->y);
+    // the orbit camera follows the fingers: its distance by the span's change since the last move
+    if (Orbit()) {
+        if (g_zoom_span > 1 && span > 1) game::OrbitCameraZoom(span / g_zoom_span);
+        g_zoom_span = span;
+        return;
+    }
+    g_zoom_span = span;
+    g_zoom = std::clamp((g_zoom_span - g_zoom_from) / (kZoomReach * Height()), -1.0f, 1.0f);
+}
+
 // FLOATING: the left stick's zone is the side of the screen it is placed on, kStickZone of the width at least and out
 // to its place's reach, so a stick moved in the editor still takes the touches where it is drawn
 bool InStickZone(float x) {
@@ -983,13 +1018,16 @@ size_t FixedStickAt(float x, float y) {
 void Recount() {
     std::fill(std::begin(g_pressed), std::end(g_pressed), false);
     bool stick = false, rstick = false;
+    int zoom = 0;
     for (const Finger& f : g_fingers) {
         if (f.role == Role::Button && ButtonShown(f.button)) g_pressed[f.button] = true;
         if (f.role == Role::Stick) stick = true;
         if (f.role == Role::Look) rstick = true;
+        if (f.role == Role::Zoom) zoom++;
     }
     if (!stick) g_stick_x = g_stick_y = 0;
     if (!rstick) g_rstick_x = g_rstick_y = 0;
+    if (zoom < 2) g_zoom = 0;
 }
 
 // Pad presses the FEng menus get from touches, one after another: a swipe's dpad steps (the list follows the finger:
@@ -1269,6 +1307,23 @@ void FingerDown(SDL_FingerID id, float x, float y) {
             }
         }
         if (kButtons[b].press == kResetCar) game::g_reset_car = true;
+        if (kButtons[b].press == kFreeCamera) {
+            if (game::GarageCameraAvailable()) game::ToggleGarageCamera();
+            else game::ToggleOrbitCamera();
+        }
+    } else if (FreeCamera() || Orbit()) {
+        // one finger turns the camera (the garage's: the right stick from where it came down), a second makes the two a
+        // pinch
+        Role turn = Orbit() ? Role::Orbit : Role::Look;
+        auto look = std::find_if(g_fingers.begin(), g_fingers.end(), [turn](const Finger& o) { return o.role == turn; });
+        if (look != g_fingers.end()) {
+            look->role = Role::Zoom;
+            f.role = Role::Zoom;
+            g_zoom_span = std::hypot(f.x - look->x, f.y - look->y);
+            g_zoom_from = g_zoom_span;
+        } else {
+            f.role = turn;
+        }
     } else if (Cinematic()) {
         f.role = x < Width() / 2 ? Role::Stick : Role::Look;
     } else if (FeMenu() && (game::CurrentFePrompts().right_stick || (game::GarageRotates() && y < kGarageTurnArea * Height()))) {
@@ -1298,8 +1353,10 @@ void FingerDown(SDL_FingerID id, float x, float y) {
 void FingerMove(SDL_FingerID id, float x, float y) {
     for (Finger& f : g_fingers) {
         if (f.id != id) continue;
+        float was_x = f.x, was_y = f.y;
         f.x = x;
         f.y = y;
+        if (f.role == Role::Orbit) game::OrbitCameraTurn((x - was_x) / Height(), (y - was_y) / Height());
         if (f.role == Role::HudDrag) DragHud(f.button, f.x - f.x0, f.y - f.y0);
         if (f.role == Role::Drag) {
             if (int g = MenuGroup(f.button); g >= 0) {
@@ -1331,6 +1388,7 @@ void FingerMove(SDL_FingerID id, float x, float y) {
         if (f.role == Role::FeTap && std::hypot(f.x - f.x0, f.y - f.y0) >= kSwipe * Height()) f.role = Role::Look;
         if (f.role == Role::FeMouse) FePointer(f, true);
         if (f.role == Role::Look) StickOf(f, g_rstick_x, g_rstick_y, kRStick);
+        if (f.role == Role::Zoom) Pinch();
         if (f.role == Role::Wheel) TurnWheel(f);
         break;
     }
@@ -1349,6 +1407,14 @@ void FingerUp(SDL_FingerID id) {
             FeSwipe(f);
         }
     std::erase_if(g_fingers, [id](const Finger& f) { return f.id == id; });
+    // the pinch's finger left behind turns the camera again, from where it is
+    if (std::count_if(g_fingers.begin(), g_fingers.end(), [](const Finger& f) { return f.role == Role::Zoom; }) == 1)
+        for (Finger& f : g_fingers)
+            if (f.role == Role::Zoom) {
+                f.role = Orbit() ? Role::Orbit : Role::Look;
+                f.x0 = f.x;
+                f.y0 = f.y;
+            }
     Recount();
 }
 
@@ -1514,6 +1580,11 @@ void Apply(int port, input::Pad& pad) {
         pad.rx = int16_t(std::clamp(g_rstick_x, -1.0f, 1.0f) * 32767.0f);
         pad.ry = int16_t(std::clamp(g_rstick_y, -1.0f, 1.0f) * 32767.0f);
     }
+    // the free camera's pinch: its triggers, the right one zooming in
+    if (g_zoom) {
+        used = true;
+        pad.analog[g_zoom > 0 ? kAnalogRT : kAnalogLT] = uint8_t(std::min(std::fabs(g_zoom), 1.0f) * 255.0f);
+    }
     if (used) pad.connected = true;
 }
 
@@ -1602,6 +1673,11 @@ void DrawIcon(const Pen& p, Icon icon) {
             p.Line(0, 0.22f, 0.36f, -0.14f);
             break;
         case Icon::Wheel:  // drawn whole by DrawWheel
+            break;
+        case Icon::Camera:  // a camera: its body, the lens and the viewfinder's hump
+            p.dl->AddRect(p.P(-0.4f, -0.2f), p.P(0.4f, 0.3f), p.col, 0.08f * p.r, 0, p.th);
+            p.Box(-0.16f, -0.32f, 0.12f, -0.2f, 0.03f);
+            p.dl->AddCircle(p.P(0, 0.05f), 0.15f * p.r, p.col, 20, p.th);
             break;
     }
 }
@@ -1901,7 +1977,8 @@ void Draw() {
         Centre(i, cx, cy);
         float r = Radius(i);
         bool hidden = !MenuPreview() && g_layout[i].hidden;  // the menus' controls are never hidden
-        bool on = !editing && (g_pressed[i] || (b.press == kSteerWheel && g_wheel_held));
+        bool on = !editing && (g_pressed[i] || (b.press == kSteerWheel && g_wheel_held) ||
+                               (b.press == kFreeCamera && (FreeCamera() || Orbit())));
         int fade = hidden ? 40 : 100;  // a hidden control shows faint in the editor
         DrawControl(dl, i, on, fade, th);
         if (editing && (int(i) == g_selected || (picked_group >= 0 && MenuGroup(i) == picked_group)))
@@ -1914,6 +1991,15 @@ void Draw() {
     }
     if ((editing && !MenuPreview()) || (!editing && !FeMenu() && !app::MenuOpen() && game::Racing()))
         for (size_t s : {kStick, kRStick}) DrawStick(dl, th, s);
+    if ((FreeCamera() || Orbit()) && !app::MenuOpen()) {  // what the camera takes, low in the middle while untouched
+        bool touched = std::any_of(g_fingers.begin(), g_fingers.end(), [](const Finger& f) {
+            return f.role == Role::Look || f.role == Role::Zoom || f.role == Role::Orbit;
+        });
+        if (!touched) {
+            std::string hint = app::Ui("FREE CAMERA") + ": " + app::Ui("DRAG TO TURN, PINCH TO ZOOM");
+            CentredText(dl, ImVec2(Width() / 2, h * 0.92f), h * 0.035f, Fade(kCream, 235), hint.c_str());
+        }
+    }
     if (editing) {
         if (g_selected >= 0 && IsStick(size_t(g_selected))) {
             size_t s = size_t(g_selected);

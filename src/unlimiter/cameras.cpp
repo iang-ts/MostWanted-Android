@@ -41,7 +41,10 @@ uint32_t NodeMenu(uint32_t menu) {
 }
 
 uint32_t OwnCamera(const CarConfig& c, uint32_t menu) {
-    if (InRange(menu, kMenuRimsFirst, kMenuRimsLast)) return c.cameras.rim_brand;
+    if (InRange(menu, kMenuRimsFirst, kMenuRimsLast)) {
+        if (!Global().separate_rims || RimsMode() > 0) return c.cameras.rim_brand;
+        return RimsMode() < 0 ? c.cameras.rim_brand_rear : c.cameras.rim_brand_all;
+    }
     if (InRange(menu, kMenuVinylsFirst, kMenuVinylsLast) || menu == kMenuVinylCustom) return c.cameras.vinyl_group;
     auto it = c.cameras.by_menu.find(menu);
     return it == c.cameras.by_menu.end() ? 0 : it->second;
