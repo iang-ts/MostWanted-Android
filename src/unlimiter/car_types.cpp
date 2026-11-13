@@ -70,3 +70,13 @@ X86_FUNC(sub_00296F80) {
     ctx.eax = (ctx.eax & ~0xFFu) | (engine == 2 ? 1u : 0u);
     ctx.esp += 4;
 }
+
+// the last compare of the stock cop types in CarRenderInfo's constructor. An add-on cop is not in that list, so it
+// would skip the damage parts. A cop that is not the helicopter or the midsize takes the damage path; the jnz still
+// runs when this returns false
+bool UnlimiterCopDamage(X86Context& ctx, uint8_t*) {
+    if (ctx.zf || !unlimiter::Active() || !unlimiter::Global().addon_cops_damage_fix) return false;
+    uint32_t type = ctx.eax;
+    if (type == 4 || type == 0x33 || type >= unlimiter::CarTypeCount()) return false;
+    return kernel::R32(unlimiter::kCarTypeInfos + type * unlimiter::kCarTypeSize + unlimiter::kCarTypeUsage) == 1;
+}

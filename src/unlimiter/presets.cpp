@@ -157,4 +157,77 @@ void SnapshotPresets() {
     LOGR("unlimiter: presets of %s kept", name.c_str());
 }
 
+struct BonusCar {
+    std::string preset;
+    int handle = -1;
+    uint32_t category = 0xF0008;
+};
+
+void ReadBonus(const Ini& ini, const std::string& section, std::vector<BonusCar>& out, bool folder) {
+    if (!ini.Has(section, "PresetName") && !folder) return;
+    BonusCar car;
+    car.preset = ini.Text(section, "PresetName");
+    car.handle = ini.Int(section, "CarRecordID", folder ? -1 : 0x12345678);
+    car.category = uint32_t(ini.Int(section, "Category", folder ? 0xF0008 : 0xF0020));
+    if (!car.preset.empty()) out.push_back(std::move(car));
+}
+
+const std::vector<BonusCar>& BonusCars() {
+    static const std::vector<BonusCar> cars = [] {
+        std::vector<BonusCar> out;
+        const Ini& ini = Data("_BonusCars.ini");
+        int count = ini.Int("BonusCars", "NumberOfBonusCars", -2);
+        if (count == -2) return out;
+        ReadBonus(ini, "BonusCar-1", out, false);
+        for (int i = 0; i <= count; i++) ReadBonus(ini, "BonusCar" + std::to_string(i), out, false);
+        for (const Ini& file : Folder("BonusCars")) ReadBonus(file, "BonusCar", out, true);
+        LOGR("unlimiter: %zu bonus cars", out.size());
+        return out;
+    }();
+    return cars;
+}
+
+uint32_t PresetName(const std::string& text) {
+    static uint32_t buffer = 0;
+    if (!buffer) buffer = mem::AllocSystem(64);
+    if (!buffer) return 0;
+    std::string cut = text.substr(0, 63);
+    std::memcpy(kernel::HostPtr(buffer), cut.c_str(), cut.size() + 1);
+    return buffer;
+}
+
+// after the disc fills a new profile: the ini's presets, then the stock bit on cars that are not a career car
+void ProfileCars(X86Context& ctx, uint32_t db) {
+    if (!Active() || !db) return;
+    constexpr uint32_t kCreatePreset = 0x140570, kFilter = 0x0C, kCareerByte = 0x11;
+    if (Global().bonus_cars) {
+        for (const BonusCar& car : BonusCars()) {
+            uint32_t name = PresetName(car.preset);
+            if (!name) break;
+            X86Context saved = ctx;
+            ctx.ecx = db;
+            uint32_t made = kernel::CallGuest(ctx, kCreatePreset, {name});
+            ctx = saved;
+            if (!made) continue;
+            if (car.handle != -1) kernel::W32(made, uint32_t(car.handle));
+            kernel::W32(made + kFilter, car.category);
+        }
+    }
+    if (!Global().stock_cars) return;
+    for (uint32_t i = 0; i < kEntries; i++) {
+        uint32_t entry = db + i * kEntry;
+        if (kernel::R32(entry) == kEmpty) continue;
+        if (*static_cast<uint8_t*>(kernel::HostPtr(entry + kCareerByte)) != kNoSlot) continue;
+        kernel::W32(entry + kFilter, kernel::R32(entry + kFilter) | 1u);
+    }
+}
+
 }  // namespace unlimiter
+
+// FEPlayerCarDB::Default, the fill of a new profile
+X86_EXTERN_FUNC(__imp__sub_00140890);
+X86_FUNC(sub_00140890) {
+    uint32_t db = ctx.ecx;
+    __imp__sub_00140890(ctx, base);
+    unlimiter::ProfileCars(ctx, db);
+}

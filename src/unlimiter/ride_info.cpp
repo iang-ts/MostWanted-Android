@@ -179,6 +179,22 @@ void StockParts(X86Context& ctx, uint32_t ride) {
     for (const StockKey& k : keys) apply(car.Text("StockParts", k.key), k.slot);
 }
 
+// a traffic car's body paint, drawn again until it is not pearl. The player and the cops are left as they were
+void TrafficPaint(X86Context& ctx, uint32_t ride) {
+    if (!Global().randomize_traffic) return;
+    uint32_t type = kernel::R32(ride + kRideCarType);
+    if (type >= CarTypeCount() || kernel::R32(kCarTypeInfos + type * kCarTypeSize + kCarTypeUsage) != 2) return;
+    constexpr uint32_t kBrand = 0xEBB03E66, kPearl = 0x03797533;
+    X86Context saved = ctx;
+    for (int attempt = 0; attempt < 10; attempt++) {
+        ctx.ecx = ride;
+        kernel::CallGuest(ctx, kRideInfoSetRandomPaint, {});
+        uint32_t part = PartAt(ride, kSlotBasePaint), brand = 0;
+        if (!part || !PartAttribute(part, kBrand, brand) || brand != kPearl) break;
+    }
+    ctx = saved;
+}
+
 }  // namespace
 
 }  // namespace unlimiter
@@ -205,5 +221,6 @@ X86_FUNC(sub_0025F980) {
     if (!unlimiter::Active() || !unlimiter::Ready()) return;
     uint32_t result = ctx.eax;
     unlimiter::StockParts(ctx, ride);
+    unlimiter::TrafficPaint(ctx, ride);
     ctx.eax = result;
 }

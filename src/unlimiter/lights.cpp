@@ -257,3 +257,11 @@ X86_FUNC(sub_000D37F0) {
     }
     __imp__sub_000D37F0(ctx, base);
 }
+
+// UpdateLightFlareParameters writes the two bright cop flares one after the other. The fix swaps which colour is which
+void UnlimiterCopBright(X86Context& ctx, uint8_t*) {
+    if (!unlimiter::Active() || !unlimiter::Global().cop_bright_lights_order_fix) return;
+    uint32_t first = kernel::R32(ctx.ebp - 0x58), second = kernel::R32(ctx.ebp - 0x54);
+    kernel::W32(ctx.ebp - 0x58, second);
+    kernel::W32(ctx.ebp - 0x54, first);
+}

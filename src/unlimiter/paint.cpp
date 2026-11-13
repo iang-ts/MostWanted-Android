@@ -459,6 +459,10 @@ X86_FUNC(sub_00254390) {
 X86_EXTERN_FUNC(__imp__sub_002A6C70);
 X86_FUNC(sub_002A6C70) {
     uint32_t screen = ctx.ecx, message = kernel::R32(ctx.esp + 4);
+    if (message == 0x911AB364 && unlimiter::AttachmentPartBack(ctx, screen)) {
+        ctx.esp += 20;
+        return;
+    }
     uint32_t menu = kernel::R32(screen + unlimiter::kScreenMenu);
     if (!unlimiter::On() || message != unlimiter::kAccept || !unlimiter::ExtraVinyl(menu))
         return __imp__sub_002A6C70(ctx, base);
@@ -508,6 +512,9 @@ X86_FUNC(sub_0029F350) {
 X86_EXTERN_FUNC(__imp__sub_00124C40);
 X86_FUNC(sub_00124C40) {
     uint32_t ret = kernel::R32(ctx.esp);
+    if (ret == 0x144121) {
+        if (uint32_t phrase = unlimiter::CopPhrase()) kernel::W32(ctx.esp + 4, phrase);
+    }
     if (unlimiter::On() && (ret == 0x2A5CE7 || ret == 0x2A62DA)) {
         uint32_t part = kernel::R32(ctx.ebp + (ret == 0x2A5CE7 ? 0xFFFFFFB8u : 0xFFFFFFB4u));
         uint32_t brand = 0;

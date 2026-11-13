@@ -16,6 +16,7 @@ namespace unlimiter {
 namespace {
 
 constexpr uint32_t kPartsPackage = 0x46C4E0;
+constexpr uint32_t kGenericTopPackage = 0x46C4DC;  // CustomizeGenericTop.fng, the attachments submenu
 constexpr uint32_t kPartsTitle = 0x158;
 constexpr uint32_t kFallbackIcon = 0x28C24F6;
 constexpr uint32_t kOptionSkipped = 0xFFFFFFFF;
@@ -253,6 +254,38 @@ void AddCategory(X86Context& ctx, uint32_t screen, uint32_t type, const Category
     Add(ctx, screen, c.menu, c.slot, icon, title);
 }
 
+void AddOneAttachment(X86Context& ctx, uint32_t screen, uint32_t type, int i) {
+    uint32_t slot = kSlotAttachment0 + uint32_t(i);
+    char key[32], name[32], text[48];
+    std::snprintf(key, sizeof key, "PartsAttachment%d", i);
+    std::snprintf(name, sizeof name, "CO_ATTACHMENT_%d", i + 1);
+    std::snprintf(text, sizeof text, "Acess\xF3rio %d", i + 1);
+    uint32_t icon = IconOf(ctx, type, key, BinHash("VISUAL_PART_ATTACHMENT"));
+    if (!TextureExists(ctx, icon)) icon = kFallbackIcon;
+    uint32_t title = CarTextHash(type, "Names", key, name);
+    Label(ctx, title, text, title == BinHash(name));
+    Add(ctx, screen, kMenuAttachmentFirst + uint32_t(i), slot, icon, title);
+}
+
+bool AnyAttachment(X86Context& ctx, uint32_t type, int count) {
+    for (int i = 0; i < count; i++)
+        if (HasParts(ctx, type, kSlotAttachment0 + uint32_t(i))) return true;
+    return false;
+}
+
+void AddAttachmentSlots(X86Context& ctx, uint32_t screen, uint32_t type, int count) {
+    for (int i = 0; i < count; i++) {
+        if (!HasParts(ctx, type, kSlotAttachment0 + uint32_t(i))) continue;
+        AddOneAttachment(ctx, screen, type, i);
+    }
+}
+
+// the disc's CO_ATTACHMENTS is the French "Pièces jointes". The other part names use the Brazilian form
+uint32_t AttachmentTitle(X86Context& ctx, uint32_t type) {
+    uint32_t title = CarTextHash(type, "Names", "PartsAttachments", "CO_ATTACHMENTS");
+    return Label(ctx, title, "Acess\xF3rios", title == BinHash("CO_ATTACHMENTS"));
+}
+
 void AddParts(X86Context& ctx, uint32_t screen) {
     uint32_t type = CurrentCarType(ctx);
     if (type == 0xFFFFFFFF) return;
@@ -260,21 +293,49 @@ void AddParts(X86Context& ctx, uint32_t screen) {
     const CarConfig& config = Config(type);
     for (const Category& c : PartsCategories())
         if (Wanted(config, c.slot)) AddCategory(ctx, screen, type, c);
-    static const char* const kAttachment[kLanguageCount] = {"ATTACHMENT %d", "ACCESSOIRE %d", "ANBAUTEIL %d", "ACCESSORIO %d",
-                                                            "ACCESORIO %d", "Acess\xF3rio %d", "AKSESORI %d"};
-    for (int i = 0; i < config.parts.attachments; i++) {
-        uint32_t slot = kSlotAttachment0 + uint32_t(i);
-        if (!HasParts(ctx, type, slot)) continue;
-        char key[32], name[32], text[48];
-        std::snprintf(key, sizeof key, "PartsAttachment%d", i);
-        std::snprintf(name, sizeof name, "CO_ATTACHMENT_%d", i + 1);
-        std::snprintf(text, sizeof text, kAttachment[LanguageIndex(ctx)], i + 1);
-        uint32_t icon = IconOf(ctx, type, key, BinHash("VISUAL_PART_ATTACHMENT"));
-        if (!TextureExists(ctx, icon)) icon = kFallbackIcon;
-        uint32_t title = CarTextHash(type, "Names", key, name);
-        Label(ctx, title, text, title == BinHash(name));
-        Add(ctx, screen, 0x10D + uint32_t(i), slot, icon, title);
+    if (config.parts.attachments <= 0 || !AnyAttachment(ctx, type, config.parts.attachments)) return;
+    // the parts list itself, unless the car asks for one Acessórios entry that opens them
+    if (config.main.attachments_under_parts) {
+        AddAttachmentSlots(ctx, screen, type, config.parts.attachments);
+        return;
     }
+    uint32_t icon = IconOf(ctx, type, "PartsAttachments", BinHash("VISUAL_PART_ATTACHMENT"));
+    if (!TextureExists(ctx, icon)) icon = kFallbackIcon;
+    uint32_t title = AttachmentTitle(ctx, type);
+    AddOwnOption(ctx, screen, kernel::R32(kGenericTopPackage), icon, title, kMenuAttachments);
+}
+
+// menu 0x10C is a category, not a part slot. The dispatcher would otherwise open the parts browser
+// the parts list ends by telling the scroller which row to stand on. Refresh reads that row, and a menu that
+// never asked crashes on the empty one
+void SelectRow(X86Context& ctx, uint32_t screen) {
+    uint32_t position = kernel::R32(screen + kScreenPreviousMenu) & 0xFFFF00FF;
+    uint32_t count = OptionCount();
+    if (position == 0 || position > count) position = 1;
+    if (!count) return;
+    if (kernel::G<uint8_t>(screen + 0x125)) {
+        kernel::G<uint8_t>(screen + 0x118) = 0;
+        kernel::G<uint8_t>(screen + 0x115) = 1;
+        kernel::G<uint8_t>(screen + 0x116) = 0;
+        kernel::W32(screen + 0x10C, 0);
+    }
+    uint32_t scroller = screen + 0x2C, vtbl = kernel::R32(scroller);
+    if (!vtbl) return;
+    X86Context saved = ctx;
+    ctx.ecx = scroller;
+    kernel::CallGuest(ctx, kernel::R32(vtbl + 0x3C), {position});
+    ctx = saved;
+}
+
+void FillAttachmentMenu(X86Context& ctx, uint32_t screen) {
+    uint32_t type = CurrentCarType(ctx);
+    if (type == 0xFFFFFFFF) return;
+    kernel::W32(screen + 0x1AC, AttachmentTitle(ctx, type));
+    BeginOptions(screen);
+    AddAttachmentSlots(ctx, screen, type, Config(type).parts.attachments);
+    PlaceInitial(screen);
+    SelectRow(ctx, screen);
+    EndOptions(screen);
 }
 
 void AddVinylGroups(X86Context& ctx, uint32_t screen) {
@@ -379,6 +440,53 @@ Stock StockMenu(const CarConfig& c, uint32_t menu, uint32_t icon) {
 }
 
 }  // namespace
+
+// the generic-top package does not know an attachment slot, so its own click and back leave the icons on the next screen
+bool AttachmentClick(X86Context& ctx, uint32_t screen, uint32_t message) {
+    if (!Active() || !Ready()) return false;
+    uint32_t type = CurrentCarType(ctx);
+    if (type >= CarTypeCount() || Config(type).main.attachments_under_parts) return false;
+    if (kernel::R32(screen + 0x14C) != kMenuAttachments) return false;
+    constexpr uint32_t kAccept = 0xC407210, kBack = 0x911AB364;
+    constexpr uint32_t kSwitch = 0xEB160, kFEng = 0x48E94C, kCategory = 0x46C4D8;
+    uint32_t package = 0, packed = 0;
+    if (message == kBack) {
+        package = kernel::R32(kCategory);
+        packed = kMenuCategoryParts | (kMenuAttachments << 16);
+    } else if (message == kAccept) {
+        uint32_t option = kernel::R32(screen + 0x38);
+        uint32_t picked = option ? kernel::R32(option + 0x50) & 0xFFFF : 0;
+        if (picked < kMenuAttachmentFirst || picked >= kMenuAttachmentFirst + kSlotAttachments) return false;
+        package = kernel::R32(option + 0x4C);
+        packed = picked | (kMenuAttachments << 16);
+    } else {
+        return false;
+    }
+    if (!package) return false;
+    X86Context saved = ctx;
+    ctx.ecx = kernel::R32(kFEng);
+    kernel::CallGuest(ctx, kSwitch, {package, packed, 0, 0});
+    ctx = saved;
+    return true;
+}
+
+// the part screen's own back opens the category package, which is the bar at the bottom. The list the player
+// came from is the top bar
+bool AttachmentPartBack(X86Context& ctx, uint32_t screen) {
+    uint32_t slot = kernel::R32(screen + 0x144);
+    if (slot < kMenuAttachmentFirst || slot >= kMenuAttachmentFirst + kSlotAttachments) return false;
+    uint32_t type = CurrentCarType(ctx);
+    if (!Active() || !Ready() || type >= CarTypeCount() || Config(type).main.attachments_under_parts) return false;
+    constexpr uint32_t kSwitch = 0xEB160, kFEng = 0x48E94C, kGenericTop = 0x46C4DC;
+    uint32_t top = kernel::R32(kGenericTop);
+    if (!top) return false;
+    LOGR("unlimiter: attachment %x back to the top list", slot);
+    X86Context saved = ctx;
+    ctx.ecx = kernel::R32(kFEng);
+    kernel::CallGuest(ctx, kSwitch, {top, (slot << 16) | kMenuAttachments, 0, 0});
+    ctx = saved;
+    return true;
+}
 
 int DecalPlace() { return g_decal_place; }
 
@@ -499,6 +607,29 @@ void UnlimiterAddVinylGroups(X86Context& ctx, uint8_t*) {
     if (!unlimiter::Active() || !unlimiter::Ready()) return;
     unlimiter::AddVinylGroups(ctx, ctx.esi);
     unlimiter::PlaceInitial(ctx.esi);
+}
+
+// CustomizeSub::Setup. The open menu is at +0x14C (kScreenMenu is the rims screen). 0x10C is filled here
+X86_EXTERN_FUNC(__imp__sub_002AF090);
+X86_FUNC(sub_002AF090) {
+    uint32_t screen = ctx.ecx;
+    uint32_t menu = kernel::R32(screen + 0x14C);
+    bool on = unlimiter::Active() && unlimiter::Ready();
+    uint32_t type = on ? unlimiter::CurrentCarType(ctx) : 0xFFFFFFFF;
+    bool submenu = on && type < unlimiter::CarTypeCount() && !unlimiter::Config(type).main.attachments_under_parts;
+    if (submenu && menu == unlimiter::kMenuAttachments) {
+        unlimiter::FillAttachmentMenu(ctx, screen);
+        uint32_t finish = kernel::R32(kernel::R32(screen) + 0x0C);
+        X86Context saved = ctx;
+        ctx.ecx = screen;
+        kernel::CallGuest(ctx, finish, {});
+        ctx = saved;
+        ctx.esp += 4;
+        return;
+    }
+    __imp__sub_002AF090(ctx, base);
+    bool slot = menu >= unlimiter::kMenuAttachmentFirst && menu < unlimiter::kMenuAttachmentFirst + unlimiter::kSlotAttachments;
+    if (submenu && slot) kernel::W32(screen + unlimiter::kScreenPreviousMenu, unlimiter::kMenuAttachments);
 }
 
 X86_EXTERN_FUNC(__imp__sub_002AB330);

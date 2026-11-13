@@ -334,3 +334,15 @@ call = "UnlimiterDecalLeftoversBegin"
 [[hook]]
 at = 0x254D4B
 call = "UnlimiterDecalLeftoversEnd"
+
+# the last stock-cop compare. An add-on cop takes the damage-parts path instead of the jnz
+[[hook]]
+at = 0x265975
+call = "UnlimiterCopDamage"
+on_true = 0x265977
+
+# after both bright-cop flare hashes are stored, swap them
+[[hook]]
+at = 0xC4DA2
+call = "UnlimiterCopBright"
+after = true

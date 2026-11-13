@@ -65,3 +65,12 @@ X86_FUNC(sub_00134250) {
     }
     __imp__sub_00134250(ctx, base);
 }
+
+// CustomizeMain::SetScreenNames already points the shop at the *_BACKROOM packages while this byte is set.
+// The flag is what turns that off
+X86_EXTERN_FUNC(__imp__sub_00297CF0);
+X86_FUNC(sub_00297CF0) {
+    constexpr uint32_t kBackroom = 0x48F208;
+    if (unlimiter::Active() && !unlimiter::Global().my_cars_backroom) kernel::G<uint8_t>(kBackroom) = 0;
+    __imp__sub_00297CF0(ctx, base);
+}

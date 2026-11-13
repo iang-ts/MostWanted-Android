@@ -70,6 +70,8 @@ const Ini& General();
 const Ini& Car(uint32_t car_type);
 const CarConfig& Config(uint32_t car_type);
 const Ini& Data(const std::string& name);
+uint32_t CopPhrase();
+void NoteCopVehicle(uint32_t vehicle);
 std::vector<Ini> Folder(const std::string& name);
 std::string CarTypeName(uint32_t car_type);
 uint32_t CarTypeCount();

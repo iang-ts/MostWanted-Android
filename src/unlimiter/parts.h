@@ -33,6 +33,9 @@ int DecalPlace();
 bool SetupDecalSlots(X86Context& ctx, uint32_t screen);
 void AddExtraDecalSlots(X86Context& ctx, uint32_t screen);
 uint32_t DecalTextureSlot(uint32_t menu);
+// the attachments list: accept opens that slot, back returns to Parts. True when the stock message must not also run
+bool AttachmentClick(X86Context& ctx, uint32_t screen, uint32_t message);
+bool AttachmentPartBack(X86Context& ctx, uint32_t screen);
 void BeginOptions(uint32_t screen);
 void NoteOption(uint32_t screen, uint32_t option);
 void PlaceInitial(uint32_t screen);

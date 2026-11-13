@@ -345,6 +345,10 @@ using unlimiter::g_mode;
 X86_EXTERN_FUNC(__imp__sub_002AAEC0);
 X86_FUNC(sub_002AAEC0) {
     uint32_t screen = ctx.ecx, message = kernel::R32(ctx.esp + 4);
+    if (unlimiter::AttachmentClick(ctx, screen, message)) {
+        ctx.esp += 4 + 16;
+        return;
+    }
     if (unlimiter::On()) {
         uint32_t option = kernel::R32(screen + unlimiter::kSubOption);
         bool rims = option && (kernel::R32(option + unlimiter::kOptionMenu) & 0xFFFF) == unlimiter::kMenuRims &&
