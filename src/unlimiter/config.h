@@ -43,6 +43,7 @@ struct CarConfig {
     struct {
         std::map<uint32_t, uint32_t> by_menu;  // a menu's frontend camera node, as an Attrib key
         uint32_t rim_brand = 0, rim_brand_rear = 0, rim_brand_all = 0, vinyl_group = 0;
+        uint32_t decal_slot[6][8] = {};
     } cameras;
 };
 

@@ -68,6 +68,13 @@ void ReadCameras(const Ini& ini, CarConfig& c) {
         std::string key = "PartsAttachment" + std::to_string(i);
         if (uint32_t camera = CameraKey(ini, key.c_str())) cams.by_menu[kMenuAttachmentFirst + i] = camera;
     }
+    static const char* const kDecal[] = {"Windshield", "RearWindow", "LeftDoor", "RightDoor", "LeftQuarter", "RightQuarter"};
+    for (int place = 0; place < 6; place++) {
+        for (int slot = 1; slot <= 8; slot++) {
+            std::string key = std::string("VisualDecals") + kDecal[place] + std::to_string(slot);
+            if (uint32_t camera = CameraKey(ini, key.c_str())) cams.decal_slot[place][slot - 1] = camera;
+        }
+    }
     cams.rim_brand = CameraKey(ini, "PartsRimsBrand");
     cams.rim_brand_rear = CameraKey(ini, "PartsRimsBrandRear");
     cams.rim_brand_all = CameraKey(ini, "PartsRimsBrandAll");

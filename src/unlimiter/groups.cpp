@@ -224,5 +224,7 @@ X86_FUNC(sub_00296FA0) {
         ctx.esp += 4;
         return;
     }
+    if (menu >= unlimiter::kMenuDecalSlotFirst + 6 && menu < unlimiter::kMenuDecalSlotFirst + unlimiter::kMenuDecalSlots)
+        kernel::W32(ctx.esp + 4, unlimiter::kMenuDecalSlotFirst + 5);
     __imp__sub_00296FA0(ctx, base);
 }

@@ -20,6 +20,10 @@
 #include "kernel/kernel.h"
 #include "kernel/memory.h"
 
+namespace unlimiter {
+void FlareCar(uint32_t info);
+}
+
 namespace game {
 
 // The console's widescreen flag (XGetVideoFlags at boot, 0x0D0202, kept at 0x48099C; set from 3:2 on, native/main.cpp)
@@ -536,7 +540,10 @@ X86_FUNC(sub_0024ABE0) {
         kernel::CallGuest(ctx, kRenderTextureHeadlights, {view, at, 0});
         ctx.ecx = info;
     }
+    // the car whose flares are drawn, so a part's RED/GREEN/BLUE can tint them (lights.cpp)
+    unlimiter::FlareCar(info);
     __imp__sub_0024ABE0(ctx, base);
+    unlimiter::FlareCar(0);
 }
 
 // A sky layer's draw (0x244B70, cdecl: the view, the layer) takes its colour from 0x42FE00 (r, g, b, a). The frame's

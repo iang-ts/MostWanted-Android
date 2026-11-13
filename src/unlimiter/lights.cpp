@@ -169,7 +169,50 @@ void UpdateLightStates(uint32_t info) {
     }
 }
 
+// the CarRenderInfo whose flares are being drawn (RenderFlaresOnCar, game.cpp). 0 outside that call
+uint32_t g_flare_car = 0;
+
+// a part's colour channels, 0 when the part has none: the draw keeps its own tint
+uint32_t Channels(uint32_t part, uint32_t red, uint32_t green, uint32_t blue) {
+    if (!part) return 0;
+    int r = PartInt(part, red, 0) & 255, g = PartInt(part, green, 0) & 255, b = PartInt(part, blue, 0) & 255;
+    if (!r && !g && !b) return 0;
+    return uint32_t(r) | (uint32_t(g) << 8) | (uint32_t(b) << 16);
+}
+
+// the flare's tint from the light part, as the PC's eRenderLightFlare_Hook. The right side uses the left when it has
+// no colour of its own
+uint32_t FlareTint(uint32_t ride, uint32_t name) {
+    static const uint32_t kRed = BinHash("RED"), kGreen = BinHash("GREEN"), kBlue = BinHash("BLUE");
+    static const uint32_t kRed2 = BinHash("RED2"), kGreen2 = BinHash("GREEN2"), kBlue2 = BinHash("BLUE2");
+    static const uint32_t kDispRed = BinHash("DISPRED"), kDispGreen = BinHash("DISPGREEN"), kDispBlue = BinHash("DISPBLUE");
+    uint32_t left_head = PartAt(ride, kSlotLeftHeadlight), right_head = PartAt(ride, kSlotRightHeadlight);
+    uint32_t left_brake = PartAt(ride, kSlotLeftBrakelight), right_brake = PartAt(ride, kSlotRightBrakelight);
+    switch (name) {
+        case 0xD09091C6: {  // RIGHT_HEADLIGHT
+            uint32_t tint = Channels(right_head, kRed, kGreen, kBlue);
+            return tint ? tint : Channels(left_head, kRed, kGreen, kBlue);
+        }
+        case 0x7A5BCF69: return Channels(left_head, kDispRed, kDispGreen, kDispBlue);  // CENTRE_HEADLIGHT
+        case 0x9DB90133: return Channels(left_head, kRed, kGreen, kBlue);              // LEFT_HEADLIGHT
+        case 0xBF700A79: {  // RIGHT_BRAKELIGHT
+            uint32_t tint = Channels(right_brake, kRed, kGreen, kBlue);
+            return tint ? tint : Channels(left_brake, kRed, kGreen, kBlue);
+        }
+        case 0xA2A2FC7C: return Channels(left_brake, kDispRed, kDispGreen, kDispBlue);  // CENTRE_BRAKELIGHT
+        case 0x31A66786: return Channels(left_brake, kRed, kGreen, kBlue);              // LEFT_BRAKELIGHT
+        case 0x7ADF7EF8: {  // RIGHT_REVERSE
+            uint32_t tint = Channels(right_brake, kRed2, kGreen2, kBlue2);
+            return tint ? tint : Channels(left_brake, kRed2, kGreen2, kBlue2);
+        }
+        case 0x7A5B2F25: return Channels(left_brake, kRed2, kGreen2, kBlue2);  // LEFT_REVERSE
+        default: return 0;
+    }
+}
+
 }  // namespace
+
+void FlareCar(uint32_t info) { g_flare_car = info; }
 
 }  // namespace unlimiter
 
@@ -194,4 +237,23 @@ X86_FUNC(sub_00243390) {
     }
     unlimiter::UpdateLightStates(ctx.ecx);
     kernel::Return(ctx, 0, 0);
+}
+
+// eRenderLightFlare (cdecl: view, flare, matrix, intensity, a5, a6, a7, colour override, size). The car's call passes
+// a zero override, and a zero there keeps the flare's own colour. A part's tint replaces it. Only while
+// RenderFlaresOnCar is drawing this car
+X86_EXTERN_FUNC(__imp__sub_000D37F0);
+X86_FUNC(sub_000D37F0) {
+    uint32_t info = unlimiter::g_flare_car;
+    if (info && unlimiter::Active() && unlimiter::Ready() && !unlimiter::Global().disable_light_flare_colors) {
+        uint32_t ride = kernel::R32(info + unlimiter::kRenderRide);
+        uint32_t flare = kernel::R32(ctx.esp + 8);
+        if (ride && flare && mem::IsCommitted(ride) && mem::IsCommitted(flare + 8)) {
+            if (uint32_t tint = unlimiter::FlareTint(ride, kernel::R32(flare + 8))) {
+                kernel::W32(ctx.esp + 0x20, tint);
+                kernel::W32(flare + 0x0C, tint);
+            }
+        }
+    }
+    __imp__sub_000D37F0(ctx, base);
 }

@@ -139,6 +139,7 @@ inline constexpr uint32_t kMenuEngine = 0x201, kMenuTransmission = 0x202, kMenuC
                           kMenuTires = 0x205, kMenuBrakes = 0x206, kMenuInduction = 0x207;
 inline constexpr uint32_t kIconTurbo = 0x06EF789C, kIconSupercharger = 0x93603DFB;
 inline constexpr uint32_t kMenuDecalPlaceFirst = 0x501, kMenuDecalPlaceLast = 0x506;
+inline constexpr uint32_t kMenuDecalSlotFirst = 0x601, kMenuDecalSlots = 8;
 inline constexpr uint32_t kSlotPartTypes = 0x469D60;
 inline constexpr uint32_t kMenuPaint = 0x301, kMenuVinyls = 0x302, kMenuRimPaint = 0x303, kMenuWindowTint = 0x304,
                           kMenuDecals = 0x305, kMenuNumbers = 0x306, kMenuCustomGauges = 0x307;

@@ -315,6 +315,22 @@ void AddVisual(X86Context& ctx, uint32_t screen) {
         if (Wanted(config, c.slot)) AddCategory(ctx, screen, type, c);
 }
 
+int g_decal_place = -1, g_decal_count = -1;
+bool g_decal_slots = false;
+
+int NumDecals(X86Context& ctx, int place) {
+    int fallback = place == 2 || place == 3 ? 6 : 1;
+    X86Context saved = ctx;
+    ctx.ecx = 0x4DEC68;
+    uint32_t part = kernel::CallGuest(ctx, 0x296480, {kSlotDecalFrontWindow + uint32_t(place)});
+    ctx = saved;
+    int count = part ? PartInt(part, BinHash("NUM_DECALS"), fallback) : fallback;
+    if (count < 0 || count > int(kMenuDecalSlots)) count = fallback;
+    // a stock door part says 5, and the disc still lists six slots. Only a higher count adds 7 and 8
+    if (count < fallback) count = fallback;
+    return count;
+}
+
 struct Stock {
     bool shown;
     const char* key;
@@ -324,6 +340,10 @@ Stock StockMenu(const CarConfig& c, uint32_t menu, uint32_t icon) {
     if (OwnRimBrands() && menu >= kMenuRimBrandFirst && menu <= kMenuRimBrandLast) return {false, nullptr};
     // the game adds 0x402 to 0x409 itself; the ini's list replaces them. 0x401 is the return-to-stock option
     if (!VinylGroups().empty() && menu >= kMenuVinylStockFirst && menu < kMenuVinylStockFirst + kMenuVinylStockCount)
+        return {false, nullptr};
+    // the doors list six slots on their own. NUM_DECALS drops the ones past the part's count
+    if (g_decal_slots && menu >= kMenuDecalSlotFirst && menu < kMenuDecalSlotFirst + 6 &&
+        int(menu - kMenuDecalSlotFirst) >= g_decal_count)
         return {false, nullptr};
     switch (menu) {
         case kMenuCategoryParts: return {c.category.parts, "Parts"};
@@ -359,6 +379,37 @@ Stock StockMenu(const CarConfig& c, uint32_t menu, uint32_t icon) {
 }
 
 }  // namespace
+
+int DecalPlace() { return g_decal_place; }
+
+bool SetupDecalSlots(X86Context& ctx, uint32_t screen) {
+    uint32_t place_menu = kernel::R32(screen + 0x14C);
+    if (place_menu < kMenuDecalPlaceFirst || place_menu > kMenuDecalPlaceLast) return false;
+    g_decal_place = int(place_menu - kMenuDecalPlaceFirst);
+    g_decal_count = NumDecals(ctx, g_decal_place);
+    g_decal_slots = true;
+    kernel::W32(0x46C508, place_menu);
+    return true;
+}
+
+void AddExtraDecalSlots(X86Context& ctx, uint32_t screen) {
+    g_decal_slots = false;
+    if (g_decal_place < 0 || g_decal_count < 0) return;
+    int from = g_decal_place == 2 || g_decal_place == 3 ? 6 : 0;
+    uint32_t package = kernel::R32(0x46C4E8);
+    for (int i = from; i < g_decal_count && i < int(kMenuDecalSlots); i++) {
+        uint32_t icon = (g_decal_place == 2 ? 0xFE957F48u : 0x2E40EADBu) + uint32_t(i);
+        uint32_t title = 0x7D212CFAu + uint32_t(i);
+        Label(ctx, title, "SLOT " + std::to_string(i + 1));
+        AddOwnOption(ctx, screen, package, icon, title, kMenuDecalSlotFirst + uint32_t(i));
+    }
+    g_decal_count = -1;
+}
+
+uint32_t DecalTextureSlot(uint32_t menu) {
+    if (g_decal_place < 0 || menu < kMenuDecalSlotFirst + 6 || menu >= kMenuDecalSlotFirst + kMenuDecalSlots) return 0;
+    return kSlotDecalTextureFirst + uint32_t(g_decal_place) * kSlotDecalTexturesPerPlace + (menu - kMenuDecalSlotFirst);
+}
 
 bool VinylGroupMenu(uint32_t menu) { return ShownVinyl(menu) != nullptr; }
 
@@ -510,6 +561,10 @@ X86_FUNC(sub_00297690) {
 void UnlimiterPartsSlot(X86Context& ctx, uint8_t*) {
     if (!unlimiter::Active()) return;
     uint32_t menu = kernel::R32(ctx.edi + unlimiter::kScreenMenu);
+    if (uint32_t decal = unlimiter::DecalTextureSlot(menu)) {
+        ctx.esi = decal;
+        return;
+    }
     if (const unlimiter::VinylShown* vinyl = unlimiter::ShownVinyl(menu)) {
         if (menu == unlimiter::kVinylCustomMenu || menu >= unlimiter::kMenuVinylExtra) {
             ctx.esi = unlimiter::kSlotVinylLayer0;
@@ -543,4 +598,38 @@ X86_FUNC(sub_00297C60) {
         }
     }
     __imp__sub_00297C60(ctx, base);
+}
+
+// the decal slot list. Doors add six slots themselves; NUM_DECALS on the place's part keeps only that many, and
+// slots 7 and 8 are ours. A window or a quarter with more than one gets its list here too
+X86_EXTERN_FUNC(__imp__sub_002AC0A0);
+X86_FUNC(sub_002AC0A0) {
+    uint32_t screen = ctx.ecx;
+    bool slots = unlimiter::Active() && unlimiter::Ready() && unlimiter::SetupDecalSlots(ctx, screen);
+    __imp__sub_002AC0A0(ctx, base);
+    if (slots) unlimiter::AddExtraDecalSlots(ctx, screen);
+}
+
+// a new decal screen is built like slot 6, so its back target is the place, then its own menu is put back
+X86_EXTERN_FUNC(__imp__sub_002AC380);
+X86_FUNC(sub_002AC380) {
+    uint32_t arg = kernel::R32(ctx.esp + 4);
+    uint32_t menu = arg ? kernel::R16(arg + 8) : 0;
+    bool extra = menu >= unlimiter::kMenuDecalSlotFirst + 6 && menu < unlimiter::kMenuDecalSlotFirst + unlimiter::kMenuDecalSlots;
+    if (extra) kernel::W16(arg + 8, uint16_t(unlimiter::kMenuDecalSlotFirst + 5));
+    __imp__sub_002AC380(ctx, base);
+    if (!extra) return;
+    kernel::W16(arg + 8, uint16_t(menu));
+    if (ctx.eax) kernel::W32(ctx.eax + unlimiter::kScreenMenu, menu);
+}
+
+// the decal slot index. Slots 1 to 6 return 0x6B to 0x70; 7 and 8 follow them
+X86_EXTERN_FUNC(__imp__sub_002985B0);
+X86_FUNC(sub_002985B0) {
+    uint32_t screen = ctx.ecx;
+    __imp__sub_002985B0(ctx, base);
+    if (!unlimiter::Active()) return;
+    uint32_t menu = kernel::R32(screen + unlimiter::kScreenMenu);
+    if (menu == unlimiter::kMenuDecalSlotFirst + 6) ctx.eax = 0x71;
+    if (menu == unlimiter::kMenuDecalSlotFirst + 7) ctx.eax = 0x72;
 }

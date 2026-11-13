@@ -1,3 +1,6 @@
+#include <algorithm>
+#include <chrono>
+
 #include "cpu/x86_ops.h"
 #include "kernel/kernel.h"
 #include "kernel/memory.h"
@@ -43,12 +46,40 @@ uint32_t NodeMenu(uint32_t menu) {
     return menu;
 }
 
+// the garage turns the front wheels from this angle, in degrees (0x299BEB: times 65536, then the first two wheel
+// matrices). The disc leaves it at about 22. The tire menu eases it to -20 and back, as the PC's CarSelectTireSteerAngle
+constexpr uint32_t kTireSteer = 0x46C4B8;
+
+void SteerTires() {
+    if (!Active() || !Ready()) return;
+    static bool saved = false;
+    static float rest = 0;
+    static auto last = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    float dt = std::chrono::duration<float>(now - last).count();
+    last = now;
+    if (dt < 0 || dt > 0.1f) dt = 1.0f / 60.0f;
+    float& angle = kernel::G<float>(kTireSteer);
+    if (!saved) {
+        rest = angle;
+        saved = true;
+    }
+    float target = g_asked.menu == kMenuTireStyle ? -20.0f : rest;
+    float step = 50.0f * dt;
+    if (angle < target) angle = std::min(angle + step, target);
+    else if (angle > target) angle = std::max(angle - step, target);
+}
+
 uint32_t OwnCamera(const CarConfig& c, uint32_t menu) {
     if (InRange(menu, kMenuRimsFirst, kMenuRimsLast)) {
         if (!Global().separate_rims || RimsMode() > 0) return c.cameras.rim_brand;
         return RimsMode() < 0 ? c.cameras.rim_brand_rear : c.cameras.rim_brand_all;
     }
     if (InRange(menu, kMenuVinylsFirst, kMenuVinylsLast) || menu == kMenuVinylCustom) return c.cameras.vinyl_group;
+    if (menu >= kMenuDecalSlotFirst && menu < kMenuDecalSlotFirst + kMenuDecalSlots) {
+        int place = DecalPlace(), slot = int(menu - kMenuDecalSlotFirst);
+        if (place >= 0 && place < 6 && slot >= 0 && slot < 8) return c.cameras.decal_slot[place][slot];
+    }
     auto it = c.cameras.by_menu.find(menu);
     return it == c.cameras.by_menu.end() ? 0 : it->second;
 }
@@ -87,6 +118,7 @@ void UnlimiterCamUserRotate(X86Context& ctx, uint8_t*) {
 X86_EXTERN_FUNC(__imp__sub_002991F0);
 X86_FUNC(sub_002991F0) {
     uint32_t node = kernel::R32(ctx.esp + 4);
+    unlimiter::SteerTires();
     __imp__sub_002991F0(ctx, base);
     if (!unlimiter::Active() || !unlimiter::Ready() || node != unlimiter::g_asked.node) return;
     uint32_t type = unlimiter::CurrentCarType(ctx);
