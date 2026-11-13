@@ -158,6 +158,18 @@ inline constexpr uint32_t kRenderWheelRadius = 0x138;
 inline constexpr uint32_t kRenderWheelWidthScale = 0x140;
 inline constexpr uint32_t kRenderWheelRadiusScale = 0x150;
 inline constexpr uint32_t kRenderEcar = 0x17C4;
+// the body's texture replacements (12 bytes: from, to, the TextureInfo or -1 to look up again), the PC's at +0x23C,
+// and the carbon fibre copy after them (0x2432D0)
+inline constexpr uint32_t kRenderReplacements = 0x24C, kRenderCarbonReplacements = 0x5B8;
+inline constexpr uint32_t kReplacementCount = 73, kReplacementSize = 12;
+// the UsedCarTextureInfo (GetUsedCarTextureInfo, 0x258640) the render keeps, and its lights' masks: on, broken
+inline constexpr uint32_t kRenderUsedTextures = 0x12B0, kRenderLightsOn = 0x1630, kRenderLightsBroken = 0x1634;
+// UsedCarTextureInfo: off, on and damaged for the headlights, their glass, the brakelights, their glass, the reverse
+inline constexpr uint32_t kUsedHeadlight = 0x340, kUsedHeadlightGlass = 0x34C, kUsedBrakelight = 0x358;
+inline constexpr uint32_t kUsedBrakelightGlass = 0x364, kUsedReverse = 0x370;
+// the cheats' and the light flares' lights held on (the PC's 0x9B092C on)
+inline constexpr uint32_t kForceHeadlights = 0x4D5734, kForceBrakelights = 0x4D5738, kForceReverselights = 0x4D573C;
+inline constexpr uint32_t kGameFlowState = 0x4936B8, kGameFlowFrontEnd = 3;
 
 inline constexpr uint32_t kDoesStringExist = 0x124BF0;
 

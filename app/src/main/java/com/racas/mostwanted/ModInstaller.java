@@ -134,8 +134,10 @@ final class ModInstaller {
         Installed result = new Installed();
         if (UnlimiterImport.isUnlimiter(files.keySet())) {
             stopGame(context);
-            UnlimiterImport.install(files, log);
+            UnlimiterImport.install(files, game, log);
             result.done.add("NFSMW Unlimiter");
+            // its CARS\WHEELS (every rim, with the tires' TIRE_STYLE01) is no car
+            paths.removeIf(p -> CarConverter.carName(p).equals("WHEELS"));
             if (paths.isEmpty()) {
                 // its vault scripts go into the game's files with the cars'
                 if (!kept().isEmpty()) rebuild(context, game, log);
@@ -330,7 +332,7 @@ final class ModInstaller {
             if (!kept.isEmpty()) {
                 try (CarConverter.Disc disc = new CarConverter.Disc(game)) {
                     for (CarConverter.Kept k : kept) CarConverter.fitGeometry(disc, k.geometry, k.parts != null, log);
-                    built = CarConverter.build(disc, kept, work, UnlimiterImport.vault(), log);
+                    built = CarConverter.build(disc, kept, work, UnlimiterImport.files(), log);
                 }
                 for (Map.Entry<String, byte[]> e : built.files.entrySet())
                     if (e.getValue() != null) write(new File(work, e.getKey().replace('/', '_')), e.getValue());

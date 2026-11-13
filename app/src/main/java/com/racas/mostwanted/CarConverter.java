@@ -98,7 +98,7 @@ final class CarConverter {
 
     private static final Pattern WANTED = Pattern.compile(
             "(.*/)?([^/]+/(geometry|textures)\\.bin|cartypeinfo[^/]*\\.bin|[^/]*\\.nfsms|[^/]*\\.end"
-            + "|secondary_logo_[^/]*\\.dds|(dbmodelpart|collision|carpart)[^/]*\\.bin|vinyls\\.bin|[^/]*\\.ini)");
+            + "|secondary_logo_[^/]*\\.dds|(dbmodelpart|collision|carpart)[^/]*\\.bin|vinyls\\.bin|[^/]*\\.ini|carparts/extra\\.bin)");
 
     // an archive's files worth keeping for convert, its paths with / in them
     static boolean wanted(String path) {
@@ -646,8 +646,22 @@ final class CarConverter {
     private static final class Solid {
         String name;
         int hash, flags, verts, ngroups, tris;
-        byte[] head, tex, sha, groups, ib;
+        byte[] head, tex, sha, groups, ib, markers = new byte[0];
         List<byte[]> vb = new ArrayList<>();
+    }
+
+    private static final int MARKER = 80;
+
+    // a solid's position markers (chunk 0x13401A: name hash, three words, a matrix), which the game reads at its header + 0x17
+    // rounded down to 16 and counts by its size (0x0D325D): where the lights' flares, the exhausts' and the like are. A mod
+    // keeps its lights' in the light parts (LEFT_HEADLIGHT, LEFT_BRAKELIGHT), the disc's cars in BASE; the game takes every
+    // part's. The words after the hash, the PC's place again, are 0 on the disc
+    private static byte[] markers(byte[] d, int o, int size) {
+        int p = modPayload(d, o, size, 16, MARKER);
+        int n = (o + size - p) / MARKER;
+        byte[] out = sub(d, p, p + n * MARKER);
+        for (int i = 0; i < n; i++) Arrays.fill(out, i * MARKER + 4, i * MARKER + 16, (byte) 0);
+        return out;
     }
 
     // a block of a pack: EA's compressed forms have a 16 byte header, the size within at +8. RAWW only stores; a block with
@@ -712,13 +726,14 @@ final class CarConverter {
     }
 
     private static Solid convertSolid(byte[] d, String car) {
-        byte[] info = null, groups = null, idx = null, verts = null, tex = new byte[0], sha = new byte[0];
+        byte[] info = null, groups = null, idx = null, verts = null, tex = new byte[0], sha = new byte[0], marks = new byte[0];
         for (int[] c : walkAll(d, 0, d.length)) {
             int sz = c[1], o = c[2];
             switch (c[0]) {
                 case 0x134011: info = sub(d, o, o + sz); break;
                 case 0x134012: tex = sub(d, o, o + sz); break;
                 case 0x134013: sha = sub(d, o, o + sz); break;
+                case 0x13401A: marks = markers(d, o, sz); break;
                 case 0x134b02: groups = sub(d, modPayload(d, o, sz, 16, 104), o + sz); break;
                 case 0x134b03: idx = sub(d, modPayload(d, o, sz, 16, 2), o + sz); break;
                 case 0x134b01: verts = sub(d, modPayload(d, o, sz, 0x80, 36), o + sz); break;
@@ -794,6 +809,7 @@ final class CarConverter {
         s.verts = totalV;
         s.tex = tex;
         s.sha = sha;
+        s.markers = marks;
         s.tris = start / 3;
         // the Xbox's header: a flag more, its name, the radius and tris per radius the mod leaves 0
         byte[] head = Arrays.copyOf(info, 0xA0);
@@ -856,6 +872,7 @@ final class CarConverter {
         to.tris = from.tris;
         to.tex = from.tex.clone();
         to.sha = from.sha.clone();
+        to.markers = from.markers.clone();
         to.groups = from.groups.clone();
         to.ib = from.ib.clone();
         to.vb = new ArrayList<>();
@@ -993,6 +1010,7 @@ final class CarConverter {
         for (int i = 0; i < texAt.length; i++) texAt[i] = tableEntry(tex, part.tex, i * 8);
         for (int i = 0; i < shaAt.length; i++) shaAt[i] = tableEntry(sha, part.sha, i * 8);
         if (body.verts + part.verts > 0xFFFF || tex.n / 8 > 255 || sha.n / 8 > 255) return false;
+        if ((body.markers.length + part.markers.length) / MARKER > 127) return false;
         int bodyIndices = indexCount(body), partIndices = indexCount(part);
         byte[] groups = part.groups.clone();
         for (int g = 0; g < part.ngroups; g++) {
@@ -1013,6 +1031,7 @@ final class CarConverter {
         body.flags |= part.flags;
         body.tex = tex.bytes();
         body.sha = sha.bytes();
+        body.markers = cat(body.markers, part.markers);
         body.head[0x19] = (byte) (tex.n / 8);
         body.head[0x1A] = (byte) (sha.n / 8);
         put32(body.head, 0x14, body.tris);
@@ -1175,6 +1194,7 @@ final class CarConverter {
                 switch (c[0]) {
                     case 0x134012: s.tex = sub(g, o, end); break;
                     case 0x134013: s.sha = sub(g, o, end); break;
+                    case 0x13401A: s.markers = markers(g, o, c[1]); break;
                     case 0x134B00:
                         s.flags = u16(g, p + 4);
                         s.verts = u16(g, p + 6);
@@ -1598,6 +1618,7 @@ final class CarConverter {
     // at: the file offset of its header; vertices on 0x80, groups and indices on 16, as on the disc
     private static byte[] buildSolid(Solid s, int at) {
         byte[] head = cat(chunk(0x134011, s.head), chunk(0x134012, s.tex), chunk(0x134013, s.sha));
+        if (s.markers.length > 0) head = cat(head, chunkAligned(0x13401A, s.markers, at + 8 + head.length, 16));
         int p = at + 8 + head.length + 8;  // 80134010 header, then 80134100 header
         Buf mesh = new Buf();
         byte[] hdr = new byte[12 + 40];
@@ -1612,6 +1633,28 @@ final class CarConverter {
         mesh.add(chunkAligned(0x134B03, s.ib, p + mesh.n, 16));
         for (byte[] v : s.vb) mesh.add(chunkAligned(0x134B01, v, p + mesh.n, 0x80));
         return chunk(0x80134010, cat(head, chunk(0x80134100, mesh.bytes())));
+    }
+
+    // the Unlimiter's CARS\WHEELS (its Wheels.end: every rim again, its tire mapped to TIRE_STYLE01, which the tires'
+    // parts replace) as the Xbox's. The disc's rims are B to D, the PC's A to D: A to C go in as B to D, as a car's
+    // LODs do, and D is left out. Each LOD is the PC's own, thinned only past a solid's vertex count
+    static byte[] convertWheels(Disc disc, byte[] pc, Consumer<String> log) throws Failure, IOException {
+        List<Solid> solids = new ArrayList<>();
+        int dropped = 0;
+        for (byte[] d : readModSolids(pc)) {
+            Solid s = convertSolid(d, "WHEELS");
+            if (s == null) continue;
+            if (s.name.endsWith("_E")) {
+                dropped++;
+                continue;
+            }
+            if (s.verts > MAX_SOLID_VERTICES) reduceSolid(s, (int) (s.tris * (double) MAX_SOLID_VERTICES / s.verts), true);
+            solids.add(s);
+        }
+        if (solids.isEmpty()) throw new Failure(Failure.Reason.UNSUPPORTED, "no rim in the Unlimiter's WHEELS");
+        byte[] out = buildGeometry(solids, disc.load("CARS\\WHEELS\\GEOMETRY.BIN"));
+        log.accept("unlimiter: wheels, " + solids.size() + " solids (" + dropped + " of the PC's lowest left out), " + out.length + " bytes");
+        return out;
     }
 
     private static byte[] buildGeometry(List<Solid> solids, byte[] template) throws Failure {
@@ -2799,7 +2842,23 @@ final class CarConverter {
 
     // what is added to a chunk is a multiple of 0x80, to keep the alignment of what follows it (textures, on 0x80). From the
     // file's end to its start, so the offsets stay good
-    private static byte[] patchGlobal(byte[] gIn, List<Kept> cars, Consumer<String> log) throws Failure {
+    static final String EXTRA_PARTS = "EXTRA";
+    private static final int SLOT_TIRE = 0x40, SLOT_NEON = 0x41;
+
+    // the slots' table (chunk 0x34607: per slot two car names whose parts it takes, -1 the car's own, 0 none; per-car
+    // rows after it) as the Unlimiter's SlotTypes\UnlimiterParts.end leaves it: the neons (BRAKELIGHT) EXTRA's only; the
+    // tires (HEADLIGHT) EXTRA's beside the car's own, which that script leaves to the PC's table
+    private static void extraSlots(byte[] g, Consumer<String> log) {
+        for (int[] c : chunks(g, 0, g.length)) {
+            if (c[0] != 0x34607 || c[1] < (SLOT_NEON + 1) * 8) continue;
+            put32(g, c[2] + SLOT_NEON * 8, bhash(EXTRA_PARTS));
+            if (i32(g, c[2] + SLOT_TIRE * 8 + 4) == 0) put32(g, c[2] + SLOT_TIRE * 8 + 4, bhash(EXTRA_PARTS));
+            return;
+        }
+        log.accept("unlimiter: no slots' table for EXTRA");
+    }
+
+    private static byte[] patchGlobal(byte[] gIn, List<Kept> cars, byte[] extraParts, Consumer<String> log) throws Failure {
         byte[] g = gIn;
         Map<Integer, int[]> sub = new HashMap<>();
         int[] types = null, partsChunk = null, collisions = null;
@@ -2853,7 +2912,16 @@ final class CarConverter {
         for (int i = 0; i < carCount; i++)
             if (i32(g, tab[2] + i * 4) == bhash(TEMPLATE_PARTS)) template = i;
         if (template < 0) throw new Failure(Failure.Reason.UNSUPPORTED, "no " + TEMPLATE_PARTS + " in the parts' car table");
-        if (carCount + cars.size() > 255) throw new Failure(Failure.Reason.UNSUPPORTED, "too many cars for the parts' table");
+        BinaryCollection.Model extra = null;
+        if (extraParts != null) {
+            try {
+                extra = BinaryCollection.model(extraParts);
+            } catch (BinaryCollection.Malformed e) {
+                log.accept("unlimiter: EXTRA.BIN, " + e.getMessage());
+            }
+        }
+        if (carCount + cars.size() + (extra != null ? 1 : 0) > 255)
+            throw new Failure(Failure.Reason.UNSUPPORTED, "too many cars for the parts' table");
         Buf run = new Buf();
         for (int i = 0; i < rows; i++)
             if ((g[parts[2] + i * 14 + 7] & 255) == template) run.add(g, parts[2] + i * 14, 14);
@@ -2886,6 +2954,12 @@ final class CarConverter {
             }
             newHashes.add(ints(bhash(car.car)));
         }
+        // the Unlimiter's EXTRA, a model of its own after the cars: the slots' table names it for the tires and the neons
+        if (extra != null) {
+            for (BinaryCollection.Part p : extra.parts) newRows.add(add.row(p, carCount + cars.size()));
+            newHashes.add(ints(bhash(EXTRA_PARTS)));
+            log.accept("unlimiter: " + extra.parts.size() + " EXTRA parts");
+        }
         add.check();
         byte[] strAdd = add.strings.bytes(), offAdd = add.offsets.bytes(), attrAdd = add.attributes.bytes(), structAdd = add.structs.bytes();
         int newRowCount = rows + newRows.n / 14;
@@ -2915,7 +2989,8 @@ final class CarConverter {
         }
         put32(g, partsChunk[2] - 4, partsChunk[1] + partsGrown);
         put32(g, head[2] + 0x20, add.attributeCount + attrAdd.length / 8);
-        put32(g, head[2] + 0x28, carCount + cars.size());
+        put32(g, head[2] + 0x28, carCount + cars.size() + (extra != null ? 1 : 0));
+        if (extra != null) extraSlots(g, log);
         put32(g, head[2] + 0x30, add.structCount + structAdd.length / 24);
         put32(g, head[2] + 0x38, newRowCount);
 
@@ -3603,9 +3678,15 @@ final class CarConverter {
         return String.format("name_%08x.dxt", bhash("SECONDARY_LOGO_" + car));
     }
 
-    // all the kept cars as the game's files. The archive goes straight to dir, as NFS_ZZDATAn.BIN: it may be large.
-    // unlimiterVault is the Unlimiter's VltEd part (UnlimiterImport.vault), applied before the cars' scripts as on the PC
-    static Built build(Disc disc, List<Kept> kept, File dir, byte[] unlimiterVault, Consumer<String> log) throws Failure, IOException {
+    // what the Unlimiter's release puts in the game's files (UnlimiterImport): its VltEd part, applied before the cars'
+    // scripts as on the PC, and its CarParts\EXTRA.BIN, the tires' and the neons' parts every car takes
+    static final class UnlimiterFiles {
+        byte[] vault, extraParts;
+        File wheels;  // CARS\WHEELS made the Xbox's (convertWheels)
+    }
+
+    // all the kept cars as the game's files. The archive goes straight to dir, as NFS_ZZDATAn.BIN: it may be large
+    static Built build(Disc disc, List<Kept> kept, File dir, UnlimiterFiles unlimiter, Consumer<String> log) throws Failure, IOException {
         Built built = new Built();
         byte[] g = jdlzDecode(disc.load("GLOBAL\\GLOBALB.LZC"));
         List<String> stock = carNames(g);
@@ -3625,7 +3706,7 @@ final class CarConverter {
         }
         if (addons.size() > MAX_ADDONS) throw new Failure(Failure.Reason.UNSUPPORTED, "more than " + MAX_ADDONS + " add-on cars");
         if (!addons.isEmpty()) {
-            g = patchGlobal(g, addons, log);
+            g = patchGlobal(g, addons, unlimiter.extraParts, log);
             byte[] lzc = jdlzEncode(g);
             if (!Arrays.equals(jdlzDecode(lzc), g)) throw new IllegalStateException("JDLZ encoder failed its round trip");
 
@@ -3634,7 +3715,7 @@ final class CarConverter {
             fe.classes = v.classes;
             fe.typeNames = v.typeNames;
             StringBuilder list = new StringBuilder(), makes = new StringBuilder();
-            if (unlimiterVault != null) applyScript(v, fe, unlimiterVault, log);
+            if (unlimiter.vault != null) applyScript(v, fe, unlimiter.vault, log);
             for (Kept k : addons) {
                 String node = k.car.toLowerCase(Locale.ROOT);
                 if (k.script != null) applyScript(v, fe, k.script, log);
@@ -3686,6 +3767,7 @@ final class CarConverter {
             built.files.put("car_types.txt", latin((FIRST_ADDON_TYPE + addons.size()) + "\n"));
             built.files.put("makes.txt", latin(makes.toString()));
         }
+        if (unlimiter.wheels != null) files.put("CARS\\WHEELS\\GEOMETRY.BIN", unlimiter.wheels);
         extrasFiles(kept, built);
         buildZdir(disc, files, alias, dir, built);
         return built;

@@ -474,19 +474,12 @@ X86_FUNC(sub_000C1BD0) {
     r = saved[0], g = saved[1], b = saved[2];
 }
 
-// In night mode, clamp bloom intensity (+0x170) to prevent blinding daytime glare
-X86_EXTERN_FUNC(__imp__sub_000CDA40);
-X86_FUNC(sub_000CDA40) {
-    if (!game::Opt().night_mode) return __imp__sub_000CDA40(ctx, base);
-    uint32_t obj = ctx.ecx;
-    float& bloom = kernel::G<float>(obj + 0x170);
-    float saved_bloom = bloom;
-    bloom = std::min(bloom, 0.20f);
-    __imp__sub_000CDA40(ctx, base);
-    bloom = saved_bloom;
-}
+// Night mode has no sun: its glare (0x0D5AB0) is skipped, and the pass that calls it (0x0D5CA0, after the cars) runs
+// with no lens flare elements (their count 0x427BE8, quads about the sun's place on screen), as it also sets the colour
+// constant 0x42FDF0 for what is drawn after it. The visual look pass' bloom (+0x170 of 0x0CDA40) stays the game's:
+// night mode once held it at 0.20, and the cars' headlight and brakelight flares, which show through it, were gone
+constexpr uint32_t kLensFlareCount = 0x427BE8;
 
-// Sun glare (0x0D5AB0) and sun disk/rays pass (0x0D5CA0): night mode skips them completely
 X86_EXTERN_FUNC(__imp__sub_000D5AB0);
 X86_FUNC(sub_000D5AB0) {
     if (game::Opt().night_mode) {
@@ -498,11 +491,11 @@ X86_FUNC(sub_000D5AB0) {
 
 X86_EXTERN_FUNC(__imp__sub_000D5CA0);
 X86_FUNC(sub_000D5CA0) {
-    if (game::Opt().night_mode) {
-        ctx.esp += 4;
-        return;
-    }
+    if (!game::Opt().night_mode) return __imp__sub_000D5CA0(ctx, base);
+    uint32_t elements = kernel::R32(kLensFlareCount);
+    kernel::W32(kLensFlareCount, 0);
     __imp__sub_000D5CA0(ctx, base);
+    kernel::W32(kLensFlareCount, elements);
 }
 
 // Vehicle headlights and flares (0x24AB90): PVehicle::mGlareState (at [esp + 4]) bits | 7
@@ -520,12 +513,28 @@ X86_FUNC(sub_0024AB90) {
     __imp__sub_0024AB90(ctx, base);
 }
 
-// Vehicle headlight ground projection (0x24ABE0): arg 5 (at [esp + 20])
-// activates the "2PLAYERHEADLIGHT1" headlight beam quad projected onto the road surface
+// CarRenderInfo::RenderFlaresOnCar (0x24ABE0, thiscall: view, position, body matrix, force light state, reflection,
+// flags) draws the headlights' beam on the road ("2PLAYERHEADLIGHT1", RenderTextureHeadlights 0x243690, thiscall: the
+// view, the car's matrix in the frame's pool, 0) only for a reflection, first. Night mode calls it itself before the
+// flares: forcing reflection on drew every flare of the car as a reflection (the brakelights went), and called after
+// the flares the beam took the render state nitrous' light trails left, an untextured white quad. Only the car's own
+// call draws it: nitrous' trails call it again for the car's past places with flags bit 2 (brakelights only), bit 1
+// the cop lights alone, and the beam drawn at each was a white glare. The matrix is the
+// body's with the position in row 3, from the frame's matrix pool (0x4808C8, its end 0x4808CC), as 0x24AC0E takes it
+constexpr uint32_t kFrameMatrices = 0x4808C8, kFrameMatricesEnd = 0x4808CC, kRenderTextureHeadlights = 0x243690;
+
 X86_EXTERN_FUNC(__imp__sub_0024ABE0);
 X86_FUNC(sub_0024ABE0) {
-    if (game::Opt().night_mode) {
-        kernel::W32(ctx.esp + 20, 1);
+    uint32_t info = ctx.ecx, view = kernel::R32(ctx.esp + 4), position = kernel::R32(ctx.esp + 8);
+    uint32_t body = kernel::R32(ctx.esp + 12), reflection = kernel::R32(ctx.esp + 20), flags = kernel::R32(ctx.esp + 24);
+    uint32_t at = kernel::R32(kFrameMatrices);
+    if (game::Opt().night_mode && !reflection && !(flags & 3) && view && position && body && at && at + 0x40 < kernel::R32(kFrameMatricesEnd)) {
+        kernel::W32(kFrameMatrices, at + 0x40);
+        std::memcpy(kernel::HostPtr(at), kernel::HostPtr(body), 0x30);
+        std::memcpy(kernel::HostPtr(at + 0x30), kernel::HostPtr(position), 0xC);
+        kernel::G<float>(at + 0x3C) = 1.0f;
+        kernel::CallGuest(ctx, kRenderTextureHeadlights, {view, at, 0});
+        ctx.ecx = info;
     }
     __imp__sub_0024ABE0(ctx, base);
 }

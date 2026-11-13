@@ -12,7 +12,7 @@ import java.util.function.Consumer;
 
 final class UnlimiterImport {
     static final String DIR = "unlimiter", SETTINGS = "NFSMWUnlimiterSettings.ini", GENERAL = "_General.ini", MARK = ".imported";
-    static final String VAULT = "vault.nfsms", VAULT_INSTALL = "vlt/install.nfsms";
+    static final String VAULT = "vault.nfsms", VAULT_INSTALL = "vlt/install.nfsms", EXTRA = "extra_parts.bin", WHEELS = "wheels_geometry.bin";
 
     private UnlimiterImport() {}
 
@@ -45,7 +45,8 @@ final class UnlimiterImport {
         return settingsPath(paths) != null && dataRoot(paths) != null;
     }
 
-    static int install(Map<String, File> files, Consumer<String> log) throws IOException {
+    // game: the disc or its folder, whose CARS\WHEELS is the template of the Unlimiter's rims (CarConverter.convertWheels)
+    static int install(Map<String, File> files, File game, Consumer<String> log) throws IOException {
         String settings = settingsPath(files.keySet()), root = dataRoot(files.keySet());
         if (settings == null || root == null) return 0;
         File dir = dir(), work = new File(ModInstaller.modsDir(), ".new_" + DIR);
@@ -67,6 +68,14 @@ final class UnlimiterImport {
         }
         writeLists(work);
         count += addedTextures(files, work, log);
+        count += wheels(files, game, work, log);
+        for (Map.Entry<String, File> e : files.entrySet()) {
+            if (!e.getKey().replace('\\', '/').toLowerCase(Locale.ROOT).endsWith("carparts/extra.bin")) continue;
+            Files.copy(e.getValue().toPath(), new File(work, EXTRA).toPath(), StandardCopyOption.REPLACE_EXISTING);
+            log.accept("unlimiter: " + e.getKey());
+            count++;
+            break;
+        }
         byte[] vault = vaultScript(files, log);
         if (vault != null) {
             Files.write(new File(work, VAULT).toPath(), vault);
@@ -140,11 +149,37 @@ final class UnlimiterImport {
         return seen.size();
     }
 
-    // the vault script kept by install, or null
-    static byte[] vault() {
-        File f = new File(dir(), VAULT);
+    // the release's CARS\WHEELS (its Wheels.end, "required for tire customization"), made the Xbox's once here: the
+    // Mods Loader's builds put it in the game's files. One the converter cannot take leaves the disc's rims and no tires
+    private static int wheels(Map<String, File> files, File game, File work, Consumer<String> log) {
+        for (Map.Entry<String, File> e : files.entrySet()) {
+            if (!e.getKey().replace('\\', '/').toLowerCase(Locale.ROOT).endsWith("cars/wheels/geometry.bin")) continue;
+            try (CarConverter.Disc disc = new CarConverter.Disc(game)) {
+                byte[] out = CarConverter.convertWheels(disc, Files.readAllBytes(e.getValue().toPath()), log);
+                Files.write(new File(work, WHEELS).toPath(), out);
+                return 1;
+            } catch (CarConverter.Failure | IOException | RuntimeException x) {
+                log.accept("unlimiter: wheels left the disc's, " + x.getMessage());
+                return 0;
+            }
+        }
+        return 0;
+    }
+
+    // what install kept for the game's files (CarConverter.build), each null when it has none
+    static CarConverter.UnlimiterFiles files() {
+        CarConverter.UnlimiterFiles out = new CarConverter.UnlimiterFiles();
+        if (!installed()) return out;
+        out.vault = read(new File(dir(), VAULT));
+        out.extraParts = read(new File(dir(), EXTRA));
+        File wheels = new File(dir(), WHEELS);
+        if (wheels.isFile()) out.wheels = wheels;
+        return out;
+    }
+
+    private static byte[] read(File f) {
         try {
-            return installed() && f.isFile() ? Files.readAllBytes(f.toPath()) : null;
+            return f.isFile() ? Files.readAllBytes(f.toPath()) : null;
         } catch (IOException e) {
             return null;
         }

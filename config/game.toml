@@ -326,3 +326,11 @@ call = "UnlimiterAddVinylGroups"
 [[hook]]
 at = 0x2A96E9
 call = "UnlimiterCamUserRotate"
+
+[[hook]]
+at = 0x254D0B
+call = "UnlimiterDecalLeftoversBegin"
+
+[[hook]]
+at = 0x254D4B
+call = "UnlimiterDecalLeftoversEnd"

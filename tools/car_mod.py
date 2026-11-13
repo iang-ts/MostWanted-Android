@@ -322,10 +322,26 @@ def reflective(shader, flags):
     return flags
 
 
+MARKER = 80
+
+
+# a solid's position markers (chunk 0x13401A: name hash, three words, a matrix), which the game reads at its header + 0x17
+# rounded down to 16 and counts by its size (0x0D325D): where the lights' flares, the exhausts' and the like are. A mod keeps
+# its lights' in the light parts (LEFT_HEADLIGHT, LEFT_BRAKELIGHT), the disc's cars in BASE; the game takes every part's. The
+# words after the hash, the PC's place again, are 0 on the disc
+def markers(d, o, size):
+    p = mod_payload(d, o, size, 16, MARKER)
+    n = (o + size - p) // MARKER
+    out = bytearray(d[p:p + n * MARKER])
+    for i in range(n):
+        out[i * MARKER + 4:i * MARKER + 16] = bytes(12)
+    return bytes(out)
+
+
 def convert_solid(d, car):
     s = Solid()
     info = groups = idx = verts = None
-    tex, sha = b"", b""
+    tex, sha, marks = b"", b"", b""
     for c, sz, o in walk_all(d):
         if c == 0x134011:
             info = d[o:o + sz]
@@ -333,6 +349,8 @@ def convert_solid(d, car):
             tex = d[o:o + sz]
         elif c == 0x134013:
             sha = d[o:o + sz]
+        elif c == 0x13401A:
+            marks = markers(d, o, sz)
         elif c == 0x134b02:
             p = mod_payload(d, o, sz, 16, 104); groups = d[p:o + sz]
         elif c == 0x134b03:
@@ -405,7 +423,7 @@ def convert_solid(d, car):
     s.groups, s.vb, s.ib = bytes(gr), vb, struct.pack("<%dH" % len(ib), *ib)
     s.flags = flags_or & 0xFFFF
     s.verts = total_v
-    s.tex, s.sha = tex, sha
+    s.tex, s.sha, s.markers = tex, sha, marks
     s.tris = start // 3
     # the Xbox's header: a flag more, its name, the radius and tris per radius the mod leaves 0
     head = bytearray(info[:0xA0])
@@ -451,7 +469,7 @@ WHEEL_SOLID = re.compile(r".*_(TIRE|WHEEL)_[A-E]")
 
 
 def copy_as(src, dst):
-    for field in ("flags", "verts", "ngroups", "tris", "tex", "sha", "groups", "ib"):
+    for field in ("flags", "verts", "ngroups", "tris", "tex", "sha", "markers", "groups", "ib"):
         setattr(dst, field, getattr(src, field))
     dst.vb = [bytes(v) for v in src.vb]
     nm = dst.name.encode("latin-1") + b"\0"
@@ -886,6 +904,8 @@ def merge_solid(body, part):
     sha_at = [table_entry(sha, part.sha, i * 8) for i in range(len(part.sha) // 8)]
     if body.verts + part.verts > 0xFFFF or len(tex) // 8 > 255 or len(sha) // 8 > 255:
         return False
+    if (len(body.markers) + len(part.markers)) // MARKER > 127:
+        return False
     body_indices, part_indices = index_count(body), index_count(part)
     groups = bytearray(part.groups)
     for g in range(part.ngroups):
@@ -904,6 +924,7 @@ def merge_solid(body, part):
     body.tris += part.tris
     body.flags |= part.flags
     body.tex, body.sha = bytes(tex), bytes(sha)
+    body.markers = body.markers + part.markers
     head = bytearray(body.head)
     head[0x19] = len(tex) // 8
     head[0x1A] = len(sha) // 8
@@ -1012,6 +1033,8 @@ def measure_wheels(solids):
 def build_solid(s, at):
     # at: the file offset of its header; vertices on 0x80, groups and indices on 16, as on the disc
     head = chunk(0x134011, s.head) + chunk(0x134012, s.tex) + chunk(0x134013, s.sha)
+    if getattr(s, "markers", b""):
+        head += chunk_aligned(0x13401A, s.markers, at + 8 + len(head), 16)
     p = at + 8 + len(head) + 8  # 80134010 header, then 80134100 header
     mesh = bytearray()
     hdr = struct.pack("<IHHHH", 0xF, s.flags, s.verts, s.ngroups, 0x20) + b"\0" * 40
