@@ -21,7 +21,7 @@ namespace {
 
 constexpr uint32_t kEmptyBrand = 0xFFFFFFFF;
 constexpr uint32_t kBrandName = 0xEBB03E66, kNumRemap = 0x6212682B;
-constexpr uint32_t kPaintIndex = 0x1B8, kSwatchSaved = 0x1BC, kSwatchList = 0x22C;
+constexpr uint32_t kPaintIndex = 0x1B8, kSwatchSaved = 0x1BC, kSwatchList = 0x22C, kSwatchNode = 0x234;
 constexpr uint32_t kBuildSwatch = 0x2A7840, kListCount = 0x4E8D0;
 constexpr uint32_t kSetLanguage = 0xEAB30, kFilterObject = 0x78008599;
 constexpr uint32_t kQueueMessage = 0xE1CB0, kFEng = 0x48E94C, kShowArrows = 0x1A7240F3;
@@ -399,7 +399,7 @@ X86_FUNC(sub_002AD160) {
         ctx.esp += 8;
         return;
     }
-    uint32_t node = kernel::R32(screen + 0x234);
+    uint32_t node = kernel::R32(screen + unlimiter::kSwatchNode);
     if (node) node += 4;
     uint32_t count = unlimiter::Call(ctx, unlimiter::kListCount, screen + unlimiter::kSwatchList, {node});
     unlimiter::Saved(cur) = int(count) - 1;
@@ -415,6 +415,15 @@ X86_FUNC(sub_002AD160) {
 X86_EXTERN_FUNC(__imp__sub_002A2580);
 X86_FUNC(sub_002A2580) {
     uint32_t screen = ctx.ecx;
+    // CustomizeScreen::RefreshHeader. Its paint and rim branches (0x2A26CD, 0x2A271A) call the virtual at +0x14,
+    // 0x2B1FC0, which is `mov eax,[ecx+0x234]; mov eax,[eax+0x18]` with no check of its own, and read the answer
+    // at once (+0x0C); the header's own later use of +0x234 does test it for null (0x2A270B). The game refreshes
+    // only with a swatch list built, so it never meets the null; the group scroll refreshes while the list is
+    // being made again, and a group that builds none left it reading through a null
+    if (unlimiter::On() && !kernel::R32(screen + unlimiter::kSwatchNode)) {
+        ctx.esp += 4;
+        return;
+    }
     __imp__sub_002A2580(ctx, base);
     if (!unlimiter::On()) return;
     uint32_t menu = kernel::R32(screen + unlimiter::kScreenMenu);
