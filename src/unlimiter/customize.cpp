@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -318,12 +319,26 @@ void SelectRow(X86Context& ctx, uint32_t screen) {
 void FillAttachmentMenu(X86Context& ctx, uint32_t screen) {
     uint32_t type = CurrentCarType(ctx);
     if (type == 0xFFFFFFFF) return;
-    kernel::W32(screen + 0x1AC, AttachmentTitle(ctx, type));
+    kernel::W32(screen + kScreenTitle, AttachmentTitle(ctx, type));
     BeginOptions(screen);
     AddAttachmentSlots(ctx, screen, type, Config(type).parts.attachments);
     PlaceInitial(screen);
     SelectRow(ctx, screen);
     EndOptions(screen);
+}
+
+// a category screen's own header. The game already picks CO_BACKROOM_PARTS over CO_PARTS and the two alike by
+// itself, so the ini only has to name the one it chose: [Names] Parts, Performance and Visual, and their three
+// Backroom* fellows, which are the only Backroom keys [Names] has
+void CategoryTitle(X86Context& ctx, uint32_t screen, const char* key, const char* backroom) {
+    if (!Active() || !Ready()) return;
+    uint32_t type = CurrentCarType(ctx);
+    if (type == 0xFFFFFFFF) return;
+    uint32_t title = kernel::R32(screen + kScreenTitle);
+    if (InBackRoom(ctx)) key = backroom;
+    uint32_t own = NameOf(ctx, type, key, title);
+    kernel::W32(screen + kScreenTitle, own);
+    UNLIMITER_NOTE(6, "unlimiter: category title %s %08X%s", key, own, own == title ? " (game's)" : "");
 }
 
 void AddVinylGroups(X86Context& ctx, uint32_t screen) {
@@ -559,7 +574,17 @@ X86_FUNC(sub_002AABD0) {
                 return;
             }
             if (s.key) {
-                kernel::W32(ctx.esp + 8, unlimiter::IconOf(ctx, type, s.key, icon));
+                // in the backroom the game's own icon is a marker, which [Icons] names apart under Backroom<Key>.
+                // The name stays the plain key, as the PC's CustomizeSub passes Names.<Key> in both branches; a
+                // key the ini leaves out keeps the marker, which is what the backroom's own menus want
+                char room[64];
+                const char* key = s.key;
+                if (unlimiter::InBackRoom(ctx)) {
+                    std::snprintf(room, sizeof room, "Backroom%s", s.key);
+                    key = room;
+                    UNLIMITER_NOTE(24, "unlimiter: backroom icon %s", room);
+                }
+                kernel::W32(ctx.esp + 8, unlimiter::IconOf(ctx, type, key, icon));
                 kernel::W32(ctx.esp + 12, unlimiter::NameOf(ctx, type, s.key, title));
             }
         }
@@ -627,6 +652,15 @@ X86_FUNC(sub_002AB330) {
     if (active) unlimiter::BeginOptions(screen);
     __imp__sub_002AB330(ctx, base);
     if (active) unlimiter::EndOptions(screen);
+    unlimiter::CategoryTitle(ctx, screen, "Parts", "BackroomParts");
+}
+
+// CustomizePerformance's category screen, the one of the three with no option work of its own to do
+X86_EXTERN_FUNC(__imp__sub_002AB4C0);
+X86_FUNC(sub_002AB4C0) {
+    uint32_t screen = ctx.ecx;
+    __imp__sub_002AB4C0(ctx, base);
+    unlimiter::CategoryTitle(ctx, screen, "Performance", "BackroomPerformance");
 }
 
 X86_EXTERN_FUNC(__imp__sub_002AB700);
@@ -636,6 +670,7 @@ X86_FUNC(sub_002AB700) {
     if (active) unlimiter::BeginOptions(screen);
     __imp__sub_002AB700(ctx, base);
     if (active) unlimiter::EndOptions(screen);
+    unlimiter::CategoryTitle(ctx, screen, "Visual", "BackroomVisual");
 }
 
 X86_EXTERN_FUNC(__imp__sub_002ABC20);

@@ -128,6 +128,9 @@ inline constexpr uint32_t kRimBrandOfMenu = 0x2983B0;
 inline constexpr uint32_t kCategoryOfMenu = 0x296FA0;
 inline constexpr uint32_t kScreenMenu = 0x144;
 inline constexpr uint32_t kScreenPreviousMenu = 0x150;
+// the category screen's own header, which the three Setups pick by backroom from a pair of immediates each
+// (0x2AB348, 0x2AB4D8 and 0x2AB716): CO_PARTS or CO_BACKROOM_PARTS, and the two alike
+inline constexpr uint32_t kScreenTitle = 0x1AC;
 inline constexpr uint32_t kOwnMenuFirst = 0x100, kOwnMenus = 0x20;
 inline constexpr uint32_t kPartNamePair = 0x4D3FD0;
 inline constexpr uint32_t kMenuVinylGroupFirst = 0x401, kMenuVinylGroupLast = 0x409;
