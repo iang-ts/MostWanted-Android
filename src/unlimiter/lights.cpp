@@ -1,5 +1,7 @@
 #include <string>
 
+#include <atomic>
+
 #include "core/log.h"
 #include "cpu/x86_ops.h"
 #include "kernel/kernel.h"
@@ -122,7 +124,19 @@ void UpdateLightStates(uint32_t info) {
     auto hash = [&](uint32_t field, int state) { return kernel::R32(used + field + uint32_t(state) * 4); };
     bool damage = c.textures.damage_lights;
 
-    bool force_head = kernel::R32(kForceHeadlights) != 0, force_brake = kernel::R32(kForceBrakelights) != 0;
+    // the front end leaves the lights off. ForceLightsOnInFE turns the headlights on in the mask itself, which is what
+    // the flares read as well, so the glow comes with the lit texture; LightTextureSwapInFE says whether the textures
+    // may follow the flares there at all, and with it off they are left as the game drew them
+    bool front_end = kernel::R32(kGameFlowState) == kGameFlowFrontEnd;
+    if (front_end && Global().force_lights_on_in_fe) {
+        kernel::W32(info + kRenderLightsOn,
+                    kernel::R32(info + kRenderLightsOn) | kLightLeftHead | kLightRightHead);
+        UNLIMITER_NOTE(4, "unlimiter: front end headlights forced on");
+    }
+    if (front_end && !Global().light_texture_swap_in_fe) return;
+
+    bool force_head = kernel::R32(kForceHeadlights) != 0;
+    bool force_brake = kernel::R32(kForceBrakelights) != 0;
     int left = force_head ? kOn : LightState(info, kLightLeftHead, damage);
     int right = force_head ? kOn : LightState(info, kLightRightHead, damage);
     if (!c.textures.headlight_off) {

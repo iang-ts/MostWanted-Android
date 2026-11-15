@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cstdio>
 #include <random>
 #include <string>
@@ -91,4 +92,13 @@ void UnlimiterRacerName(X86Context& ctx, uint8_t*) {
     if (count <= unlimiter::kStockRacerNames) return;
     static std::mt19937 random{std::random_device{}()};
     ctx.eax = uint32_t(random() % count);
+}
+
+// GRaceStatus::AddRacer, at the "is this race a career one?" compare that guards the character-name lookup. Skipping
+// it lets a Challenge Series racer keep the name its record carries outside the career too. The null check on the
+// game-mode object just above stays where it is
+bool UnlimiterChallengeName(X86Context&, uint8_t*) {
+    if (!unlimiter::Active() || !unlimiter::Global().challenge_series_name_fix) return false;
+    UNLIMITER_NOTE(4, "unlimiter: challenge series name outside career");
+    return true;
 }

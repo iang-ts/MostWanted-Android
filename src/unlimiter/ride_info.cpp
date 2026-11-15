@@ -107,55 +107,6 @@ void SetRear(X86Context& ctx, uint32_t ride, uint32_t part, bool update) {
     ctx = saved;
 }
 
-struct StockKey {
-    const char* key;
-    uint32_t slot;
-};
-
-std::vector<StockKey> StockKeys() {
-    std::vector<StockKey> out = {
-        {"BodyKits", kSlotBody}, {"Spoilers", kSlotSpoiler}, {"Hoods", kSlotHood}, {"RoofScoops", kSlotRoof},
-        {"Interior", kSlotInterior}, {"Roof", kSlotBase}, {"Brakes", kSlotFrontBrake}, {"Headlights", kSlotLeftHeadlight},
-        {"Taillights", kSlotLeftBrakelight}, {"Mirrors", kSlotLeftMirror}, {"Paint", kSlotBasePaint},
-        {"Vinyls", kSlotVinylLayer0}, {"RimPaint", kSlotPaintRim}, {"WindowTint", kSlotWindowTint},
-        {"CustomGauges", kSlotCustomHud}, {"CustomGaugesBackingColor", kSlotHudBackingColour},
-        {"CustomGaugesNeedleColor", kSlotHudNeedleColour}, {"CustomGaugesCharacterColor", kSlotHudCharacterColour},
-        {"Driver", kSlotDriver}, {"LicensePlate", kSlotLicensePlate}, {"Tires", kSlotTire}, {"Neon", kSlotNeon},
-        {"NumbersLeftL", kSlotDecalTextureFirst + 2 * kSlotDecalTexturesPerPlace + 6},
-        {"NumbersLeftR", kSlotDecalTextureFirst + 2 * kSlotDecalTexturesPerPlace + 7},
-        {"NumbersRightL", kSlotDecalTextureFirst + 3 * kSlotDecalTexturesPerPlace + 6},
-        {"NumbersRightR", kSlotDecalTextureFirst + 3 * kSlotDecalTexturesPerPlace + 7},
-    };
-    static const std::vector<std::string> names = [] {
-        std::vector<std::string> n;
-        char key[32];
-        for (int i = 0; i < 10; i++) {
-            std::snprintf(key, sizeof key, "Attachment%d", i);
-            n.push_back(key);
-        }
-        for (int i = 1; i <= 4; i++) {
-            std::snprintf(key, sizeof key, "VinylColor%d", i);
-            n.push_back(key);
-        }
-        static const char* const kPlaces[6] = {"DecalsWindshield", "DecalsRearWindow", "DecalsLeftDoor",
-                                               "DecalsRightDoor", "DecalsLeftQuarter", "DecalsRightQuarter"};
-        for (int p = 0; p < 6; p++)
-            for (int i = 1; i <= 8; i++) {
-                std::snprintf(key, sizeof key, "%s%d", kPlaces[p], i);
-                n.push_back(key);
-            }
-        return n;
-    }();
-    for (uint32_t i = 0; i < 10; i++) out.push_back({names[i].c_str(), kSlotAttachment0 + i});
-    for (uint32_t i = 0; i < 4; i++) out.push_back({names[10 + i].c_str(), kSlotVinylColour0 + i});
-    for (uint32_t p = 0; p < 6; p++) {
-        uint32_t count = p == 2 || p == 3 ? 6 : 8;
-        for (uint32_t i = 0; i < count; i++)
-            out.push_back({names[14 + p * 8 + i].c_str(), kSlotDecalTextureFirst + p * kSlotDecalTexturesPerPlace + i});
-    }
-    return out;
-}
-
 void SetPart(X86Context& ctx, uint32_t ride, uint32_t slot, uint32_t part) {
     X86Context saved = ctx;
     ctx.ecx = ride;
@@ -175,20 +126,22 @@ void StockParts(X86Context& ctx, uint32_t ride) {
     std::string rims = car.Text("StockParts", "Rims");
     apply(rims.empty() ? car.Text("StockParts", "RimsFront") : rims, kSlotFrontWheel);
     apply(rims.empty() ? car.Text("StockParts", "RimsRear") : rims, kSlotRearWheel);
-    static const std::vector<StockKey> keys = StockKeys();
-    for (const StockKey& k : keys) apply(car.Text("StockParts", k.key), k.slot);
+    for (const SlotKey& k : SlotKeys()) apply(car.Text("StockParts", k.key), k.slot);
 }
 
-// a traffic car's body paint, drawn again until it is not pearl. The player and the cops are left as they were
+// a traffic car's body paint, drawn again until it is not pearl: pearl wants a second texture layer traffic has none
+// of. The player and the cops are left as they were, and a car says for itself whether it takes part
 void TrafficPaint(X86Context& ctx, uint32_t ride) {
     if (!Global().randomize_traffic) return;
     uint32_t type = kernel::R32(ride + kRideCarType);
-    if (type >= CarTypeCount() || kernel::R32(kCarTypeInfos + type * kCarTypeSize + kCarTypeUsage) != 2) return;
+    uint32_t record = CarTypeRecord(type);
+    if (!record || kernel::R32(record + kCarTypeUsage) != 2) return;
+    if (!Config(type).random_parts.in_traffic) return;
     constexpr uint32_t kBrand = 0xEBB03E66, kPearl = 0x03797533;
     X86Context saved = ctx;
     for (int attempt = 0; attempt < 10; attempt++) {
         ctx.ecx = ride;
-        kernel::CallGuest(ctx, kRideInfoSetRandomPaint, {});
+        kernel::CallGuest(ctx, kRideInfoSetRandomPart, {kSlotBasePaint, 0xFFFFFFFF});
         uint32_t part = PartAt(ride, kSlotBasePaint), brand = 0;
         if (!part || !PartAttribute(part, kBrand, brand) || brand != kPearl) break;
     }

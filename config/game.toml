@@ -346,3 +346,48 @@ on_true = 0x265977
 at = 0xC4DA2
 call = "UnlimiterCopBright"
 after = true
+
+# the vehicle render's free skin-slot walk, just before it gives up at 12. CarSkinCount keeps it going while the
+# 32-bit mask at 0x469C78 still has room, and the body it returns to is the one that tests the next bit
+[[hook]]
+at = 0x262DAF
+call = "UnlimiterCarSkinSlot"
+on_true = 0x262DA0
+
+# FECarRecord::GetLogoHash, at the test on the strcmp of the manufacturer name against "". SecondaryLogoFix skips it
+# so an add-on car with no make still asks for SECONDARY_LOGO_%s instead of GENERIC_LOGO_256
+[[hook]]
+at = 0x140D7C
+call = "UnlimiterSecondaryLogo"
+on_true = 0x140D80
+
+# GRaceStatus::AddRacer, at the career-mode compare in front of the character-name lookup. Skipping it is what lets
+# a Challenge Series opponent keep its own name
+[[hook]]
+at = 0x18528B
+call = "UnlimiterChallengeName"
+on_true = 0x185294
+
+# VehiclePartDamageBehaviour's ctor, between the push of the zone-to-slot map and the push of the zone index.
+# CopSpoilerDamageFix swaps the pushed table for one that names DAMAGE_COP_SPOILER in the rear and top zones
+[[hook]]
+at = 0x26473D
+call = "UnlimiterCopSpoilerDamage"
+
+# CarRenderInfo::Render's camber block. The image reads the ecar's own front and rear camber; a body kit's
+# FRONT_CAMBER / REAR_CAMBER overrides each one in place, on the FPU stack, as the PC mod's GetCamber does.
+# The first entry is the test that keeps the block off every model past the second, which the mod nops
+[[hook]]
+at = 0x256251
+call = "UnlimiterCamberLod"
+on_true = 0x256253
+
+[[hook]]
+at = 0x25625D
+call = "UnlimiterCamberFront"
+after = true
+
+[[hook]]
+at = 0x256276
+call = "UnlimiterCamberRear"
+after = true

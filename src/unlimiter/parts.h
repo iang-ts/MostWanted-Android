@@ -1,10 +1,19 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 
 struct X86Context;
 
 namespace unlimiter {
+
+// the Unlimiter's ini name for each car slot, shared by [StockParts], [RandomParts] and [FECooling]. The names the
+// mod swaps are kept: RoofScoops is the ROOF slot, Roof the BASE one
+struct SlotKey {
+    const char* key;
+    uint32_t slot;
+};
+const std::vector<SlotKey>& SlotKeys();
 
 uint32_t HashFrom(const char* text, uint32_t start);
 uint32_t PartAt(uint32_t ride, uint32_t slot);

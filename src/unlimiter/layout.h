@@ -41,7 +41,14 @@ inline constexpr uint32_t kPartLightMaterialHash = 0x254390;
 inline constexpr uint32_t kRideInfoInit = 0x245100;
 inline constexpr uint32_t kRideInfoSetPart = 0x25D650;
 inline constexpr uint32_t kRideInfoSetStockParts = 0x25F980;
-inline constexpr uint32_t kRideInfoSetRandomPaint = 0x25F610;
+// every slot back to the car type's own, the paint among them: what SetRandomParts runs first. SetStockParts above
+// draws the base paint instead, and SetRandomPart (the PC's 0x7596E0) is the picker both of them lean on
+inline constexpr uint32_t kRideInfoSetStockPartsAll = 0x25F610;
+inline constexpr uint32_t kRideInfoSetRandomParts = 0x260F80;  // the PC's 0x75B220
+inline constexpr uint32_t kRideInfoSetRandomPart = 0x25F860;   // thiscall: the slot, the upgrade level
+inline constexpr uint32_t kRideSkinned = 0x07, kRideSkinHash = 0x3C, kRideWheelHash = 0x40, kRideSpinnerHash = 0x44;
+// the car types the image itself carries; a type past them came from a pack (game/car_mods.cpp agrees)
+inline constexpr uint32_t kStockCarTypes = 84;
 inline constexpr uint32_t kRideCarType = 0x000;
 inline constexpr uint32_t kRideParts = 0x048;
 inline constexpr uint32_t kRidePartsEnabled = 0x274;
@@ -178,5 +185,24 @@ inline constexpr uint32_t kForceHeadlights = 0x4D5734, kForceBrakelights = 0x4D5
 inline constexpr uint32_t kGameFlowState = 0x4936B8, kGameFlowFrontEnd = 3;
 
 inline constexpr uint32_t kDoesStringExist = 0x124BF0;
+
+// RideInfo::SetCompositeNameHash (DUMMY_SKIN%d, DUMMY_WHEEL%d, DUMMY_SPINNER%d) and the free-slot mask the vehicle
+// render walks. The image already keeps two tiers, 1 to 4 and 5 to 12, and the mask holds 32
+inline constexpr uint32_t kSetCompositeNameHash = 0x24FD00;
+inline constexpr uint32_t kSkinSlotMask = 0x469C78, kSkinSlots = 12, kSkinSlotLimit = 32;
+
+// CarCustomizeManager::UpdateHeatOnVehicle (the PC's 0x7AF330): the part at +8, the career record at +0xC
+inline constexpr uint32_t kUpdateHeatOnVehicle = 0x29F190;
+inline constexpr uint32_t kPartIsPerformance = 0x1C, kPartSlotId = 0x10;
+inline constexpr uint32_t kFeDatabase = 0x48EDD4, kFeDatabaseCareer = 0x12C;
+inline constexpr uint32_t kCustomizeInBackRoom = 0x12B700, kTestCareerCustomization = 0x4DEC5D;
+
+inline constexpr uint32_t kReplaceLightMaterial = 0x0C3DA0;  // eModel::ReplaceLightMaterial, the PC's 0x501640
+
+// VehiclePartDamageBehaviour's zone-to-slot map (the PC's 0x75F14C), 119 pairs of {DamageZone_ID, CAR_SLOT_ID} and a
+// {0xFFFF, 0xFFFF} terminator. The ctor at 0x264690 hands the same table to each of the ten zones
+inline constexpr uint32_t kSlotZoneMap = 0x46B238, kZoneMapEnd = 0xFFFF;
+inline constexpr uint32_t kZoneRear = 1, kZoneLeftRear = 6, kZoneRightRear = 7, kZoneTop = 8;
+inline constexpr uint32_t kDamageCopSpoiler = 4;  // the slot the names table at 0x46BACC gives DAMAGE_COP_SPOILER
 
 }  // namespace unlimiter

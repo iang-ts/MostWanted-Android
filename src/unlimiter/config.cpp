@@ -9,6 +9,7 @@
 #include "kernel/kernel.h"
 #include "kernel/memory.h"
 #include "unlimiter/layout.h"
+#include "unlimiter/parts.h"
 
 namespace unlimiter {
 
@@ -32,6 +33,8 @@ struct State {
 bool On(const Ini& ini, const char* section, const char* key, bool fallback) {
     return ini.Int(section, key, fallback ? 1 : 0) != 0;
 }
+
+int Clamp(int value, int low, int high) { return value < low ? low : value > high ? high : value; }
 
 // [Cameras]: a frontend camera node's name for a menu, over the one its screen node names. The decal slots by place wait
 // for the menu that picks them
@@ -79,6 +82,46 @@ void ReadCameras(const Ini& ini, CarConfig& c) {
     cams.rim_brand_rear = CameraKey(ini, "PartsRimsBrandRear");
     cams.rim_brand_all = CameraKey(ini, "PartsRimsBrandAll");
     cams.vinyl_group = CameraKey(ini, "VisualVinylsGroup");
+}
+
+// [RandomParts]: what the game may draw for a racer's ride. The slots carry the ini's own names, and Rims stands for
+// both wheels, as [StockParts] does
+void ReadRandomParts(const Ini& ini, CarConfig& c) {
+    auto& r = c.random_parts;
+    r.level = ini.Int("RandomParts", "ForceCustomizationLevel", r.level);
+    r.custom = ini.Int("RandomParts", "CustomRandomParts", r.custom);
+    r.rear_rim_chance = Clamp(ini.Int("RandomParts", "RandomRearRimProbability", r.rear_rim_chance), 0, 100);
+    r.numbers_chance = Clamp(ini.Int("RandomParts", "NumbersProbability", r.numbers_chance), 0, 100);
+    r.match_side_decals = On(ini, "RandomParts", "MatchSideDecals", r.match_side_decals);
+    r.in_traffic = On(ini, "RandomParts", "RandomizeInTraffic", r.in_traffic);
+    for (const SlotKey& k : SlotKeys()) r.slot[k.slot] = On(ini, "RandomParts", k.key, false);
+    bool rims = On(ini, "RandomParts", "Rims", false);
+    r.slot[kSlotFrontWheel] = rims || On(ini, "RandomParts", "RimsFront", false);
+    r.slot[kSlotRearWheel] = rims || On(ini, "RandomParts", "RimsRear", false);
+}
+
+// [FECooling]: 0 leaves a slot to the fecooling the VLT holds, as the PC's UpdateHeatOnVehicle does. The slots the
+// Unlimiter adds have none there, so they carry their own fallbacks
+void ReadCooling(const Ini& ini, CarConfig& c) {
+    static const struct {
+        const char* key;
+        float fallback;
+    } kOwn[] = {
+        {"Interior", 0.98f}, {"Roof", 0.75f},   {"Brakes", 0.98f},       {"Headlights", 0.9f}, {"Taillights", 0.9f},
+        {"Mirrors", 0.9f},   {"Driver", 0.9f},  {"LicensePlate", 0.75f}, {"Tires", 0.99f},     {"Neon", 0.95f},
+    };
+    for (const SlotKey& k : SlotKeys()) {
+        float fallback = 0.0f;
+        for (const auto& own : kOwn)
+            if (!std::strcmp(k.key, own.key)) fallback = own.fallback;
+        if (!std::strncmp(k.key, "Attachment", 10)) fallback = 0.95f;
+        c.cooling[k.slot] = ini.Float("FECooling", k.key, fallback);
+    }
+    float rims = ini.Float("FECooling", "Rims", 0.0f);
+    c.cooling[kSlotFrontWheel] = c.cooling[kSlotRearWheel] = rims;
+    // one key covers every decal place and the numbers among them
+    float decals = ini.Float("FECooling", "Decals", 0.0f);
+    for (uint32_t i = 0; i < 6 * kSlotDecalTexturesPerPlace; i++) c.cooling[kSlotDecalTextureFirst + i] = decals;
 }
 
 CarConfig ReadConfig(const Ini& ini) {
@@ -137,6 +180,8 @@ CarConfig ReadConfig(const Ini& ini) {
                                            "DecalsRightDoor", "DecalsLeftQuarter", "DecalsRightQuarter"};
     for (int i = 0; i < 6; i++) v.decal_places[i] = On(ini, "Visual", kPlaces[i], v.decal_places[i]);
     ReadCameras(ini, c);
+    ReadRandomParts(ini, c);
+    ReadCooling(ini, c);
     return c;
 }
 
@@ -274,6 +319,11 @@ std::vector<Ini> Folder(const std::string& name) {
 
 uint32_t CarTypeCount() { return game::CarTypeCount(); }
 
+uint32_t CarTypeRecord(uint32_t car_type) {
+    uint32_t table = kernel::R32(kCarTypeInfos);
+    return !table || car_type >= CarTypeCount() ? 0 : table + car_type * kCarTypeSize;
+}
+
 std::string CarTypeName(uint32_t car_type) {
     uint32_t table = kernel::R32(kCarTypeInfos);
     if (!table || car_type >= CarTypeCount()) return {};
@@ -321,6 +371,8 @@ void Frame(X86Context&) {
     }
     s.ready = true;
     LOGR("unlimiter: %u car types configured", n);
+    MarkSkinnable();
+    ApplyFixes();
 }
 
 }  // namespace unlimiter

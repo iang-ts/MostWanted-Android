@@ -1,6 +1,8 @@
 #include "unlimiter/parts.h"
 
+#include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "common/options.h"
@@ -21,7 +23,56 @@ namespace {
 constexpr uint32_t kCustomizeManager = 0x4DEC68, kManagerRecord = 0x04;
 constexpr uint32_t kNoAttributes = 0xFFFF;
 
+std::vector<SlotKey> BuildSlotKeys() {
+    std::vector<SlotKey> out = {
+        {"BodyKits", kSlotBody}, {"Spoilers", kSlotSpoiler}, {"Hoods", kSlotHood}, {"RoofScoops", kSlotRoof},
+        {"Interior", kSlotInterior}, {"Roof", kSlotBase}, {"Brakes", kSlotFrontBrake}, {"Headlights", kSlotLeftHeadlight},
+        {"Taillights", kSlotLeftBrakelight}, {"Mirrors", kSlotLeftMirror}, {"Paint", kSlotBasePaint},
+        {"Vinyls", kSlotVinylLayer0}, {"RimPaint", kSlotPaintRim}, {"WindowTint", kSlotWindowTint},
+        {"CustomGauges", kSlotCustomHud}, {"CustomGaugesBackingColor", kSlotHudBackingColour},
+        {"CustomGaugesNeedleColor", kSlotHudNeedleColour}, {"CustomGaugesCharacterColor", kSlotHudCharacterColour},
+        {"Driver", kSlotDriver}, {"LicensePlate", kSlotLicensePlate}, {"Tires", kSlotTire}, {"Neon", kSlotNeon},
+        {"NumbersLeftL", kSlotDecalTextureFirst + 2 * kSlotDecalTexturesPerPlace + 6},
+        {"NumbersLeftR", kSlotDecalTextureFirst + 2 * kSlotDecalTexturesPerPlace + 7},
+        {"NumbersRightL", kSlotDecalTextureFirst + 3 * kSlotDecalTexturesPerPlace + 6},
+        {"NumbersRightR", kSlotDecalTextureFirst + 3 * kSlotDecalTexturesPerPlace + 7},
+    };
+    static const std::vector<std::string> names = [] {
+        std::vector<std::string> n;
+        char key[32];
+        for (int i = 0; i < 10; i++) {
+            std::snprintf(key, sizeof key, "Attachment%d", i);
+            n.push_back(key);
+        }
+        for (int i = 1; i <= 4; i++) {
+            std::snprintf(key, sizeof key, "VinylColor%d", i);
+            n.push_back(key);
+        }
+        static const char* const kPlaces[6] = {"DecalsWindshield", "DecalsRearWindow", "DecalsLeftDoor",
+                                               "DecalsRightDoor", "DecalsLeftQuarter", "DecalsRightQuarter"};
+        for (int p = 0; p < 6; p++)
+            for (int i = 1; i <= 8; i++) {
+                std::snprintf(key, sizeof key, "%s%d", kPlaces[p], i);
+                n.push_back(key);
+            }
+        return n;
+    }();
+    for (uint32_t i = 0; i < 10; i++) out.push_back({names[i].c_str(), kSlotAttachment0 + i});
+    for (uint32_t i = 0; i < 4; i++) out.push_back({names[10 + i].c_str(), kSlotVinylColour0 + i});
+    for (uint32_t p = 0; p < 6; p++) {
+        uint32_t count = p == 2 || p == 3 ? 6 : 8;
+        for (uint32_t i = 0; i < count; i++)
+            out.push_back({names[14 + p * 8 + i].c_str(), kSlotDecalTextureFirst + p * kSlotDecalTexturesPerPlace + i});
+    }
+    return out;
+}
+
 }  // namespace
+
+const std::vector<SlotKey>& SlotKeys() {
+    static const std::vector<SlotKey> keys = BuildSlotKeys();
+    return keys;
+}
 
 uint32_t HashFrom(const char* text, uint32_t start) {
     uint32_t h = start;

@@ -5,8 +5,13 @@
 #include <vector>
 
 #include "unlimiter/ini.h"
+#include "unlimiter/layout.h"
 
 struct X86Context;
+
+// LOG_FIRST writes at Info, which a release build drops: a note that has to survive one is a Report. The file that
+// uses this includes <atomic> and core/log.h
+#define UNLIMITER_NOTE(n, ...)                                                       do {                                                                                 static std::atomic<int> _note{0};                                                if (_note.fetch_add(1, std::memory_order_relaxed) < (n)) LOGR(__VA_ARGS__);     } while (0)
 
 namespace unlimiter {
 
@@ -45,6 +50,17 @@ struct CarConfig {
         uint32_t rim_brand = 0, rim_brand_rear = 0, rim_brand_all = 0, vinyl_group = 0;
         uint32_t decal_slot[6][8] = {};
     } cameras;
+    struct {
+        // -2 draws a level 0 to 2, -1 leaves the ride stock. 0 picks no vanilla level, 1 skips the vanilla pass and
+        // takes the slots below, 2 runs both
+        int level = -2;
+        int custom = 0;
+        int rear_rim_chance = 25, numbers_chance = 25;
+        bool match_side_decals = false, in_traffic = false;
+        bool slot[kSlotCount] = {};
+    } random_parts;
+    // [FECooling]: a slot's heat multiplier, 0 for the one the VLT already holds
+    float cooling[kSlotCount] = {};
 };
 
 struct GlobalSettings {
@@ -74,6 +90,8 @@ uint32_t CopPhrase();
 void NoteCopVehicle(uint32_t vehicle);
 std::vector<Ini> Folder(const std::string& name);
 std::string CarTypeName(uint32_t car_type);
+// a car type's record, 0 when the table is not mapped yet. kCarTypeInfos points at the table, it is not the table
+uint32_t CarTypeRecord(uint32_t car_type);
 uint32_t CarTypeCount();
 uint32_t CarTypeOfHash(uint32_t name_hash);
 
@@ -89,6 +107,11 @@ int RimsMode();
 uint32_t WheelCartTitle(uint32_t slot);
 void RearWheelTextures(X86Context& ctx, uint32_t info, uint32_t ride);
 uint32_t SpinnerTexture(X86Context& ctx, uint32_t hash);
+
+bool MoreCarSkins();
+uint32_t CarSkinSlots();
+void MarkSkinnable();
+void ApplyFixes();
 
 void Frame(X86Context& ctx);
 void ExpandPools();

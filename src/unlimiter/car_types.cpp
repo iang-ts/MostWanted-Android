@@ -78,5 +78,6 @@ bool UnlimiterCopDamage(X86Context& ctx, uint8_t*) {
     if (ctx.zf || !unlimiter::Active() || !unlimiter::Global().addon_cops_damage_fix) return false;
     uint32_t type = ctx.eax;
     if (type == 4 || type == 0x33 || type >= unlimiter::CarTypeCount()) return false;
-    return kernel::R32(unlimiter::kCarTypeInfos + type * unlimiter::kCarTypeSize + unlimiter::kCarTypeUsage) == 1;
+    uint32_t record = unlimiter::CarTypeRecord(type);
+    return record && kernel::R32(record + unlimiter::kCarTypeUsage) == 1;
 }
