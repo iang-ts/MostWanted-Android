@@ -33,7 +33,8 @@ const char* CategoryKey(uint32_t part_type, bool turbo) {
     return kCategories[part_type];
 }
 
-bool EngineFlavour(X86Context& ctx, uint32_t which) {
+// IsTurbo, IsRotaryCar and IsCastrolCar are all thiscalls on the manager with no argument, answering in al
+bool ManagerFlag(X86Context& ctx, uint32_t which) {
     X86Context saved = ctx;
     ctx.ecx = kCustomizeManager;
     uint32_t on = kernel::CallGuest(ctx, which, {});
@@ -45,8 +46,8 @@ bool EngineFlavour(X86Context& ctx, uint32_t which) {
 // of packages 2 and 4 on a rotary car, item 3 of package 4 on a castrol one
 const char* EngineSuffix(X86Context& ctx, uint32_t part_type, uint32_t package, uint32_t part) {
     if (part_type != kPerfEngine) return "";
-    if (part == 1 && (package == 2 || package == 4) && EngineFlavour(ctx, kIsRotaryCar)) return "Rotary";
-    if (part == 3 && package == 4 && EngineFlavour(ctx, kIsCastrolCar)) return "Castrol";
+    if (part == 1 && (package == 2 || package == 4) && ManagerFlag(ctx, kIsRotaryCar)) return "Rotary";
+    if (part == 3 && package == 4 && ManagerFlag(ctx, kIsCastrolCar)) return "Castrol";
     return "";
 }
 
@@ -72,6 +73,46 @@ uint32_t ShopCar(X86Context& ctx) {
     return type < CarTypeCount() ? type : 0xFFFFFFFF;
 }
 
+// SelectablePart, the node the shop's buttons and the cart both carry: its level at +0x14, its part type at +0x18 and
+// the flag that tells a performance package from a visual part at +0x1C
+constexpr uint32_t kSelectedLevel = 0x14, kSelectedType = 0x18, kSelectedIsPerf = 0x1C;
+
+// the ini's name for each tier, PN_LEVEL_0 to PN_LEVEL_6 and PN_LEVEL_JUNKMAN
+constexpr const char* kTiers[kPerfTierCount] = {
+    "Stock", "Street", "SuperStreet", "Race", "Pro", "SuperPro", "Ultimate", "Junkman",
+};
+
+bool TierKey(char* out, size_t size, X86Context& ctx, uint32_t part_type, uint32_t tier) {
+    if (tier >= kPerfTierCount) return false;
+    const char* category = CategoryKey(part_type, part_type == kPerfInduction && ManagerFlag(ctx, kIsTurbo));
+    if (!category) return false;
+    std::snprintf(out, size, "Performance%s%s", category, kTiers[tier]);
+    return true;
+}
+
+uint32_t TierLabel(X86Context& ctx, bool icon, uint32_t part_type, uint32_t tier, uint32_t fallback) {
+    uint32_t type = ShopCar(ctx);
+    if (type == 0xFFFFFFFF) return fallback;
+    char key[64];
+    if (!TierKey(key, sizeof key, ctx, part_type, tier)) return fallback;
+    uint32_t hash = icon ? IconOf(ctx, type, key, fallback) : NameOf(ctx, type, key, fallback);
+    UNLIMITER_NOTE(16, "unlimiter: perf tier %s %s %08X%s", icon ? "icon" : "name", key, hash,
+                   hash == fallback ? " (game's)" : "");
+    return hash;
+}
+
+// the tier a button stands for. A category has fewer packages than the seven tiers and its own are the last of them,
+// so the raw level has to be counted back from the category's top, exactly as the game does for the cart's name
+uint32_t TierOf(X86Context& ctx, uint32_t part_type, uint32_t level) {
+    if (level == kPerfJunkmanTier) return kPerfJunkmanTier;
+    X86Context saved = ctx;
+    uint32_t top = kernel::CallGuest(ctx, kUpgradesMaxLevel, {kPhysicsUpgrades, part_type});
+    ctx = saved;
+    uint32_t tier = level - top + 6;
+    // stock, and any level the category does not reach, as the game's own tier names answer PN_LEVEL_0 for them
+    return tier < kPerfJunkmanTier ? tier : 0;
+}
+
 }  // namespace
 
 // the part is 1 based for the name and 0 based for the icon, as the PC mod's own calls have it
@@ -85,6 +126,12 @@ uint32_t ItemLabel(X86Context& ctx, bool icon, uint32_t part_type, uint32_t pack
     UNLIMITER_NOTE(12, "unlimiter: perf %s %s %08X%s", icon ? "icon" : "name", key, hash,
                    hash == fallback ? " (game's)" : "");
     return hash;
+}
+
+// the cart's junkman tier, whose hash the game pushes as an immediate: paint.cpp's GetLocalizedString override is
+// where that push can still be reached, so the key has to be reachable from there too
+uint32_t PerfTierName(X86Context& ctx, uint32_t part_type, uint32_t tier, uint32_t fallback) {
+    return TierLabel(ctx, false, part_type, tier, fallback);
 }
 
 }  // namespace unlimiter
@@ -114,4 +161,31 @@ X86_FUNC(sub_002A2900) {
     }
     __imp__sub_002A2900(ctx, base);
     ctx.eax = unlimiter::ItemLabel(ctx, true, part_type, package, part + 1, turbo, ctx.eax);
+}
+
+// FEShoppingCartItem::GetPerfPkgLevelHash (stdcall, ret 0x04, the PC's 0x7A5EE0): the tier alone, 0 to 6, with no
+// word of the category the ini key needs. Its only caller is DrawPartName (0x2A5B10), which keeps the part type in
+// ebx from the SelectablePart it read at 0x2A5B34 and does not touch it across the call, so that is where it comes
+// from rather than from the screen. The game answers PN_LEVEL_0 for a tier it has not, and so must the key
+X86_EXTERN_FUNC(__imp__sub_00297620);
+X86_FUNC(sub_00297620) {
+    uint32_t tier = kernel::R32(ctx.esp + 4), part_type = ctx.ebx;
+    __imp__sub_00297620(ctx, base);
+    if (tier >= unlimiter::kPerfJunkmanTier) tier = 0;
+    ctx.eax = unlimiter::PerfTierName(ctx, part_type, tier, ctx.eax);
+}
+
+// CustomizationScreen::AddPartOption (thiscall, ret 0x18). The performance shop's tier buttons all push the one
+// PERFORMANCE_ICON_PACKAGE_1 (0x2A8B3B, 0x2A8C25 and 0x2A8CE1), so the ini's per tier icon goes in here; its six
+// other call sites are visual parts, which the SelectablePart's own performance flag tells apart. The part is null
+// when the allocation above the call failed, which the game itself goes on to pass
+X86_EXTERN_FUNC(__imp__sub_002A1570);
+X86_FUNC(sub_002A1570) {
+    uint32_t part = kernel::R32(ctx.esp + 4);
+    if (part && kernel::G<uint8_t>(part + unlimiter::kSelectedIsPerf)) {
+        uint32_t part_type = kernel::R32(part + unlimiter::kSelectedType);
+        uint32_t tier = unlimiter::TierOf(ctx, part_type, kernel::R32(part + unlimiter::kSelectedLevel));
+        kernel::W32(ctx.esp + 8, unlimiter::TierLabel(ctx, true, part_type, tier, kernel::R32(ctx.esp + 8)));
+    }
+    __imp__sub_002A1570(ctx, base);
 }

@@ -30,6 +30,8 @@ bool TextureExists(X86Context& ctx, uint32_t hash);
 uint32_t Label(X86Context& ctx, uint32_t hash, const std::string& own_text, bool replace = false);
 uint32_t IconOf(X86Context& ctx, uint32_t type, const char* key, uint32_t fallback);
 uint32_t NameOf(X86Context& ctx, uint32_t type, const char* key, uint32_t fallback);
+// Performance<Cat><Tier> in [Names] (performance.cpp). Only the cart's junkman line needs it from elsewhere
+uint32_t PerfTierName(X86Context& ctx, uint32_t part_type, uint32_t tier, uint32_t fallback);
 inline constexpr int kLanguageCount = 7;
 int LanguageIndex(X86Context& ctx);
 uint32_t AddOwnOption(X86Context& ctx, uint32_t screen, uint32_t package, uint32_t icon, uint32_t title, uint32_t menu);

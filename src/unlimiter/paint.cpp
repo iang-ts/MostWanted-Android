@@ -524,6 +524,13 @@ X86_FUNC(sub_00124C40) {
     if (ret == 0x144121) {
         if (uint32_t phrase = unlimiter::CopPhrase()) kernel::W32(ctx.esp + 4, phrase);
     }
+    // the cart's junkman tier (0x2A5B51 and the French 0x2A5B77): DrawPartName pushes PN_LEVEL_JUNKMAN itself, so
+    // unlike the other six tiers there is no GetPerfPkgLevelHash call to wrap. ebx is still the part type the branch
+    // read off the SelectablePart at 0x2A5B34
+    if (unlimiter::On() && (ret == unlimiter::kCartJunkmanName || ret == unlimiter::kCartJunkmanNameFr)) {
+        uint32_t own = unlimiter::PerfTierName(ctx, ctx.ebx, unlimiter::kPerfJunkmanTier, kernel::R32(ctx.esp + 4));
+        kernel::W32(ctx.esp + 4, own);
+    }
     if (unlimiter::On() && (ret == 0x2A5CE7 || ret == 0x2A62DA)) {
         uint32_t part = kernel::R32(ctx.ebp + (ret == 0x2A5CE7 ? 0xFFFFFFB8u : 0xFFFFFFB4u));
         uint32_t brand = 0;

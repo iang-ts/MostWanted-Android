@@ -172,6 +172,18 @@ inline constexpr uint32_t kPerfJunkmanName = 0xEDD14807;    // PN_LEVEL_JUNKMAN
 // is the ini's Chassis, and type 5 is Turbo or Supercharger by IsTurbo)
 inline constexpr uint32_t kPerfTires = 0, kPerfBrakes = 1, kPerfChassis = 2, kPerfTransmission = 3, kPerfEngine = 4,
                           kPerfInduction = 5, kPerfNitrous = 6, kPerfPartTypes = 7;
+// the tiers the ini names: Stock to Ultimate, then Junkman. A category has fewer packages than the seven tiers, and
+// its own run the last of them, so a raw upgrade level becomes a tier by level - GetMaxLevel(type) + 6, which is what
+// both the cart (0x2A5BA8) and Setup (0x2A8BF1) work out. Junkman is level 7 throughout
+inline constexpr uint32_t kPerfTierCount = 8, kPerfJunkmanTier = 7;
+inline constexpr uint32_t kUpgradesMaxLevel = 0x1CFBF0;  // Physics::Upgrades::GetMaxLevel. cdecl: the object, the type
+inline constexpr uint32_t kPhysicsUpgrades = 0x4DEC70;   // the PC's _FECarRecord + 4
+// CustomizationScreen::AddPartOption, thiscall, ret 0x18: the part, its icon, the option's index, 0, the unlock and
+// whether it is locked. The performance tier buttons are its only performance callers
+inline constexpr uint32_t kAddPartOption = 0x2A1570;
+// GetLocalizedString's returns in FEShoppingCartItem::DrawPartName where the junkman tier's name is looked up: the
+// game pushes PN_LEVEL_JUNKMAN itself, so that tier has no lookup of its own to wrap (paint.cpp owns the override)
+inline constexpr uint32_t kCartJunkmanName = 0x2A5B56, kCartJunkmanNameFr = 0x2A5B7C;
 
 inline constexpr uint32_t kGetUsedCarTextureInfo = 0x258640;
 inline constexpr uint32_t kUsedLightPartsAt = 0x25896F;
