@@ -222,18 +222,6 @@ void Reset(uint32_t car) {
     g.car = car;
 }
 
-uint32_t IconOf(X86Context& ctx, uint32_t type, const char* key, uint32_t fallback) {
-    uint32_t hash = CarHash(type, "Icons", key, fallback);
-    if (hash == 0xFFFFFFFF || hash == fallback) return fallback;
-    return TextureExists(ctx, hash) ? hash : fallback;
-}
-
-uint32_t NameOf(X86Context& ctx, uint32_t type, const char* key, uint32_t fallback) {
-    uint32_t hash = CarHash(type, "Names", key, fallback);
-    if (hash == 0xFFFFFFFF || hash == fallback) return fallback;
-    return StringExists(ctx, hash) ? hash : fallback;
-}
-
 void Add(X86Context& ctx, uint32_t screen, uint32_t menu, uint32_t slot, uint32_t icon, uint32_t title) {
     uint32_t index = menu - kOwnMenuFirst;
     if (index < kOwnMenus) {

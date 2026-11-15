@@ -20,7 +20,6 @@ namespace unlimiter {
 
 namespace {
 
-constexpr uint32_t kCustomizeManager = 0x4DEC68, kManagerRecord = 0x04;
 constexpr uint32_t kNoAttributes = 0xFFFF;
 
 std::vector<SlotKey> BuildSlotKeys() {
@@ -134,6 +133,15 @@ uint32_t CurrentCarType(X86Context& ctx) {
     return type;
 }
 
+// CustomizeIsInBackRoom: the junkman shop, and My Cars with MyCarsBackroom on. The backroom draws its own marker
+// icons and its own screen titles, which are the Backroom* keys rather than the ones the normal shop takes
+bool InBackRoom(X86Context& ctx) {
+    X86Context saved = ctx;
+    uint32_t in = kernel::CallGuest(ctx, kCustomizeInBackRoom, {});
+    ctx = saved;
+    return (in & 0xFF) != 0;
+}
+
 bool StringExists(X86Context& ctx, uint32_t hash) {
     X86Context saved = ctx;
     bool found = (kernel::CallGuest(ctx, kDoesStringExist, {hash}) & 0xFF) != 0;
@@ -151,6 +159,20 @@ bool TextureExists(X86Context& ctx, uint32_t hash) {
 uint32_t Label(X86Context& ctx, uint32_t hash, const std::string& own_text, bool replace) {
     if (replace || !StringExists(ctx, hash)) game::SetOwnString(hash, own_text);
     return hash;
+}
+
+// an [Icons] or [Names] key over what the game itself answered. A key the ini leaves out, or one that names a texture
+// or string the game has not, keeps the game's own: a pack that renames one item must not blank the rest
+uint32_t IconOf(X86Context& ctx, uint32_t type, const char* key, uint32_t fallback) {
+    uint32_t hash = CarHash(type, "Icons", key, fallback);
+    if (hash == 0xFFFFFFFF || hash == fallback) return fallback;
+    return TextureExists(ctx, hash) ? hash : fallback;
+}
+
+uint32_t NameOf(X86Context& ctx, uint32_t type, const char* key, uint32_t fallback) {
+    uint32_t hash = CarHash(type, "Names", key, fallback);
+    if (hash == 0xFFFFFFFF || hash == fallback) return fallback;
+    return StringExists(ctx, hash) ? hash : fallback;
 }
 
 namespace {

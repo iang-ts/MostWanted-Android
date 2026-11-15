@@ -28,13 +28,6 @@ bool InCareer() {
            (kernel::G<uint8_t>(database + kFeDatabaseCareer) & 1);
 }
 
-bool InBackRoom(X86Context& ctx) {
-    X86Context saved = ctx;
-    uint32_t in = kernel::CallGuest(ctx, kCustomizeInBackRoom, {});
-    ctx = saved;
-    return (in & 0xFF) != 0;
-}
-
 }  // namespace
 
 // 0 when the slot keeps the VLT's own cooling, which leaves the call to the game

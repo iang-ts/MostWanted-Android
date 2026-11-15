@@ -113,6 +113,7 @@ inline constexpr uint32_t kSlotDecalRightQuarter = 0x4B;
 inline constexpr uint32_t kPartTypeVinyl = 0x4F;
 inline constexpr uint32_t kPartTypeWheel = 0x43;
 
+inline constexpr uint32_t kCustomizeManager = 0x4DEC68, kManagerRecord = 0x04;
 inline constexpr uint32_t kAddCustomOption = 0x2AABD0;
 inline constexpr uint32_t kSetupParts = 0x2AB330;
 inline constexpr uint32_t kSetupPerformance = 0x2AB4C0;
@@ -152,6 +153,25 @@ inline constexpr uint32_t kMenuPaint = 0x301, kMenuVinyls = 0x302, kMenuRimPaint
                           kMenuDecals = 0x305, kMenuNumbers = 0x306, kMenuCustomGauges = 0x307;
 inline constexpr uint32_t kMenuRimBrandFirst = 0x702, kMenuRimBrandLast = 0x70B, kMenuRimBrandOwn = 0x70C;
 inline constexpr uint32_t kMenuRimBrandExtra = 0x710, kMaxRimBrands = 63, kStockRimBrands = 10;
+
+// CustomizePerformance's lookups, for [Names] and [Icons] on a performance item. The PC mod replaces RefreshHeader
+// (0x2A2CE0) and Setup (0x2A86E0) whole; wrapping the lookups alone leaves the game its package counts and its
+// backroom branch. The game builds no item table: RefreshHeader works the three lines out on every refresh
+inline constexpr uint32_t kGetPerfPkgDesc = 0x298730;   // thiscall, ret 0x10: type, package, part (1 based), turbo
+inline constexpr uint32_t kGetPerfPkgBrand = 0x2A2900;  // the PC's 0x7B2BD0. thiscall, ret 0x0C: type, level, part
+// stdcall, ret 0x04 each: the package level, and the part type. The level one answers PN_LEVEL_0 plus the level for 1
+// to 6 and PN_LEVEL_0 for anything else, junkman being the caller's own immediate
+inline constexpr uint32_t kGetPerfPkgLevelHash = 0x297620;  // the PC's 0x7A5EE0
+inline constexpr uint32_t kGetPerfPkgCatHash = 0x29FE20;    // the PC's 0x7AFFF0
+inline constexpr uint32_t kIsTurbo = 0x29F920;              // thiscall on the manager, al: turbo, else supercharger
+// thiscall on the manager, no stack argument. car_types.cpp already answers both from [Main] EngineType
+inline constexpr uint32_t kIsCastrolCar = 0x296F60, kIsRotaryCar = 0x296F80;
+inline constexpr uint32_t kPerfLevelName = 0x69C270C3;      // PN_LEVEL_0, the tier names running from it
+inline constexpr uint32_t kPerfJunkmanName = 0xEDD14807;    // PN_LEVEL_JUNKMAN
+// the part type the two item lookups take: the game's own names, which the ini keys do not all match (its SUSPENSION
+// is the ini's Chassis, and type 5 is Turbo or Supercharger by IsTurbo)
+inline constexpr uint32_t kPerfTires = 0, kPerfBrakes = 1, kPerfChassis = 2, kPerfTransmission = 3, kPerfEngine = 4,
+                          kPerfInduction = 5, kPerfNitrous = 6, kPerfPartTypes = 7;
 
 inline constexpr uint32_t kGetUsedCarTextureInfo = 0x258640;
 inline constexpr uint32_t kUsedLightPartsAt = 0x25896F;
