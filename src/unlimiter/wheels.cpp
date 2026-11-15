@@ -1,4 +1,5 @@
 #include <atomic>
+#include <cmath>
 #include <cstring>
 
 #include "core/log.h"
@@ -36,6 +37,11 @@ constexpr uint32_t kFeCompressions = 0x8D5BEB72, kGetAttributePointer = 0x490A0;
 
 // the skid mark sits half a tire off the wheel's centre, less the camber allowance the PC mod uses
 constexpr float kSkidCamberAdjust = 0.03f;
+
+// a bMatrix4's three basis rows, 16 bytes each, the place in the fourth. A row within this much of unit length is
+// taken for unscaled, which keeps every stock car out of ScalingLightFix's way
+constexpr uint32_t kMatrixRow = 16;
+constexpr float kUnscaled = 1e-4f;
 
 float RF(uint32_t va) {
     uint32_t raw = kernel::R32(va);
@@ -123,6 +129,37 @@ float VaultCompression(X86Context& ctx, uint32_t info, uint32_t pair) {
 }  // namespace
 
 bool KitWheelsOn() { return Active() && Ready() && !Global().disable_kit_wheel_modifications; }
+
+// elCloneLightContext (0xC4C80, cdecl: the light context, the model's local_world, the world view, the camera's
+// world position, the view, and the context to clone from), called nine times and only out of CarRenderInfo::Render.
+// A kit that scales a wheel hands it a scaled matrix and the model's lighting comes out of that scale; the PC mod
+// decomposes the matrix and rebuilds it from the rotation and the place alone, which for a row matrix is the three
+// basis rows normalised. The copy is only handed over when there is a scale to take out, so a stock car never sees
+// it; the PC patches four of the nine sites, and the other five answer themselves here
+void UnscaleLightMatrix(X86Context& ctx) {
+    if (!Active() || !Ready() || !Global().scaling_light_fix) return;
+    uint32_t matrix = kernel::R32(ctx.esp + 8);
+    static uint32_t own = mem::AllocSystem(kMatrixBytes);
+    if (!matrix || !own) return;
+    float length[3];
+    bool scaled = false;
+    for (uint32_t row = 0; row < 3; ++row) {
+        uint32_t at = matrix + row * kMatrixRow;
+        float x = RF(at), y = RF(at + 4), z = RF(at + 8);
+        length[row] = std::sqrt(x * x + y * y + z * z);
+        if (length[row] <= 0) return;
+        scaled |= std::fabs(length[row] - 1.0f) > kUnscaled;
+    }
+    if (!scaled) return;
+    for (uint32_t at = 0; at < kMatrixBytes; at += 4) kernel::W32(own + at, kernel::R32(matrix + at));
+    for (uint32_t row = 0; row < 3; ++row)
+        for (uint32_t axis = 0; axis < 3; ++axis) {
+            uint32_t at = own + row * kMatrixRow + axis * 4;
+            WF(at, RF(at) / length[row]);
+        }
+    kernel::W32(ctx.esp + 8, own);
+    UNLIMITER_NOTE(4, "unlimiter: light matrix unscaled %.3f %.3f %.3f", length[0], length[1], length[2]);
+}
 
 // one float of the body kit over the value the image has just put on the FPU stack, which stays the fallback. The
 // note only fires for a kit that really names the attribute, so a stock car leaves no trace
@@ -263,4 +300,24 @@ X86_FUNC(sub_002430C0) {
     __imp__sub_002430C0(ctx, base);
     if (!(ctx.eax & 0xFF) || !out || !unlimiter::KitWheelsOn()) return;
     unlimiter::KitFeCompression(ctx, car, index, out);
+}
+
+// CarRenderConn::UpdateRenderMatrix's chassis ride height, the attribute 0x24CB15EA looked up at 0x24F3CC and, like
+// the ecar's, in inches. The image works out the highest of the four wheels' offsets and lowers the body only when
+// that is already past the height asked for, the compare at 0x24F46B; with the test gone the difference is always
+// applied, so a kit that sits too low is raised as well. This is the PC's MakeRangedNOP(0x7470AC, 0x7470B2), and the
+// hook has to answer true to skip the jump, the same shape as UnlimiterCamberLod above
+bool UnlimiterRideHeightFix(X86Context& ctx, uint8_t*) {
+    if (!unlimiter::Active() || !unlimiter::Ready() || !unlimiter::Global().ride_height_fix) return false;
+    // st0 is the highest of the four wheel offsets and [ebp-0x08] the chassis height, both already in metres. The
+    // note only fires where the image would have left the body alone, which is the whole of what the fix changes
+    float wheels = float(X87_ST(0)), chassis = unlimiter::RF(ctx.ebp - 0x08);
+    if (wheels <= chassis) UNLIMITER_NOTE(4, "unlimiter: ride height fix, wheels %.3f under chassis %.3f", wheels, chassis);
+    return true;
+}
+
+X86_EXTERN_FUNC(__imp__sub_000C4C80);
+X86_FUNC(sub_000C4C80) {
+    unlimiter::UnscaleLightMatrix(ctx);
+    __imp__sub_000C4C80(ctx, base);
 }

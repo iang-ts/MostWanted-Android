@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 
 #include "cpu/x86_ops.h"
@@ -84,7 +85,28 @@ uint32_t OwnCamera(const CarConfig& c, uint32_t menu) {
     return it == c.cameras.by_menu.end() ? 0 : it->second;
 }
 
+// the Showcase screen, the one Showcase.fng is pushed for: its ctor is 0x296030 and its dtor 0x296240, the PC's
+// 0x7A4680 and 0x7A4890, both of them writing the vtable 0x3EC488 that the screen's NotificationMessage (0x2962A0)
+// sits in. A counter rather than a bool, so a second screen could never leave it set
+std::atomic<int> g_showcase{0};
+
+// SelectCarCameraMover's mode: 0 takes no input at all, 1 is the player's own, and anything else first snapshots the
+// camera into the player-controlled fields before it goes to 1
+constexpr uint32_t kMoverMode = 0x90;
+
+// DisableCameraAutoCenter, the PC's cave at 0x476FFA: mode 2 takes mode 1's path, so the camera is not reset under
+// the player's first touch of the stick. The three speed setters have the test byte for byte, one per axis
+void KeepCameraWhereItIs(X86Context& ctx) {
+    if (!Active() || !Ready() || !Global().disable_camera_auto_center) return;
+    if (kernel::R32(ctx.ecx + kMoverMode) != 2) return;
+    kernel::W32(ctx.ecx + kMoverMode, 1);
+    UNLIMITER_NOTE(4, "unlimiter: camera mover kept where it is");
+}
+
 }  // namespace
+
+// whether a Showcase screen is up (cameras.cpp)
+bool InShowcase() { return g_showcase.load() > 0; }
 
 }  // namespace unlimiter
 
@@ -124,4 +146,56 @@ X86_FUNC(sub_002991F0) {
     uint32_t type = unlimiter::CurrentCarType(ctx);
     if (type >= unlimiter::CarTypeCount()) return;
     if (uint32_t camera = unlimiter::OwnCamera(unlimiter::Config(type), unlimiter::g_asked.menu)) ctx.eax = camera;
+}
+
+// Showcase::Showcase (0x296030, thiscall ret 0x04) and Showcase::~Showcase (0x296240, thiscall), which stand in for
+// the PC mod's InShowcase. Nothing else in the image tells the screen apart: its own vtable 0x3EC488 is three slots
+// long and the package name is only ever pushed, never kept
+X86_EXTERN_FUNC(__imp__sub_00296030);
+X86_FUNC(sub_00296030) {
+    __imp__sub_00296030(ctx, base);
+    ++unlimiter::g_showcase;
+    UNLIMITER_NOTE(4, "unlimiter: showcase open");
+}
+
+X86_EXTERN_FUNC(__imp__sub_00296240);
+X86_FUNC(sub_00296240) {
+    int had = unlimiter::g_showcase.load();
+    if (had > 0) unlimiter::g_showcase.store(had - 1);
+    __imp__sub_00296240(ctx, base);
+    UNLIMITER_NOTE(4, "unlimiter: showcase closed");
+}
+
+// GarageMainScreen::HandleJoyEvents (0x294210), just after the load of the debug byte 0x493D10 that lets the stick
+// turn the camera when the screen's own cam_user_rotate (+0x84) is clear. That byte is never set in this build, and
+// the Showcase is what answers it here: UnlimiterCamUserRotate below takes cam_user_rotate off the camera's node
+// instead of the screen's, as the PC's 0x7BA070 patch does, and the Showcase's angle node need not carry it.
+// The PC mod goes the other way at its own site (0x7A2380) and makes the Showcase the *only* screen the stick turns,
+// which is a keyboard problem: there the arrow keys both walk the menu and turn the car. Here the right stick walks
+// no menu, the port already shows it as a drag prompt on the touch screen, and taking it away would be a loss
+void UnlimiterShowcaseRotate(X86Context& ctx, uint8_t*) {
+    if (!unlimiter::Active() || !unlimiter::InShowcase()) return;
+    ctx.eax = (ctx.eax & ~0xFFu) | 1u;
+    UNLIMITER_NOTE(4, "unlimiter: showcase turns the camera");
+}
+
+// SelectCarCameraMover::SetYawSpeed (0x5F150), SetPitchSpeed (0x5F210) and SetZoomSpeed (0x5F2D0), thiscall with the
+// speed. The PC patches the middle one's mode test (0x476FFA) alone because its cave is written for that site; the
+// three are identical here but for the field each stores, so all three take the same answer
+X86_EXTERN_FUNC(__imp__sub_0005F150);
+X86_FUNC(sub_0005F150) {
+    unlimiter::KeepCameraWhereItIs(ctx);
+    __imp__sub_0005F150(ctx, base);
+}
+
+X86_EXTERN_FUNC(__imp__sub_0005F210);
+X86_FUNC(sub_0005F210) {
+    unlimiter::KeepCameraWhereItIs(ctx);
+    __imp__sub_0005F210(ctx, base);
+}
+
+X86_EXTERN_FUNC(__imp__sub_0005F2D0);
+X86_FUNC(sub_0005F2D0) {
+    unlimiter::KeepCameraWhereItIs(ctx);
+    __imp__sub_0005F2D0(ctx, base);
 }

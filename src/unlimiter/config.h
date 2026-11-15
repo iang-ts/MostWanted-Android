@@ -67,7 +67,7 @@ struct GlobalSettings {
     int replacement_model = 1;
     bool manufacturer_hook = true, my_cars_backroom = true, cop_destroyed_strings = true, random_parts = true;
     bool bonus_cars = false, stock_cars = false, presitter = true, randomize_traffic = false, separate_rims = true;
-    bool disappearing_wheels_fix = true, secondary_logo_fix = true, addon_cops_damage_fix = true;
+    bool secondary_logo_fix = true, addon_cops_damage_fix = true;
     bool challenge_series_name_fix = true, light_material_crash_fix = false, ride_height_fix = true, fng_fix = false;
     bool car_skin_fix = true, scaling_light_fix = false, cop_bright_lights_order_fix = true, cop_spoiler_damage_fix = true;
     bool expand_memory_pools = true, force_stock_parts_on_addon_opponents = false, force_lights_on_in_fe = false;

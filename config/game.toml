@@ -427,3 +427,19 @@ after = true
 [[hook]]
 at = 0x24EFF2
 call = "UnlimiterSkidWidth"
+
+# GarageMainScreen::HandleJoyEvents (0x294210), right after the load of the debug byte 0x493D10. The stick turns the
+# camera when the screen's cam_user_rotate (+0x84) is set or while that byte is, and nothing in this build ever sets
+# it: the Showcase answers it instead, which is what the PC mod's InShowcase does from the screen's ctor and dtor
+[[hook]]
+at = 0x29428C
+call = "UnlimiterShowcaseRotate"
+after = true
+
+# CarRenderConn::UpdateRenderMatrix (0x24F100), the test that only lowers the body when the wheels' highest offset is
+# already past the chassis ride height. RideHeightFix skips the jump so both heights are always added, the PC's
+# MakeRangedNOP(0x7470AC, 0x7470B2); the FPU stack is left at the same depth either way, popped at 0x24F552
+[[hook]]
+at = 0x24F473
+call = "UnlimiterRideHeightFix"
+on_true = 0x24F479

@@ -197,7 +197,6 @@ GlobalSettings ReadGlobal(const Ini& ini) {
     g.presitter = On(ini, "Main", "EnablePresitter", g.presitter);
     g.randomize_traffic = On(ini, "Main", "RandomizeTraffic", g.randomize_traffic);
     g.separate_rims = On(ini, "Main", "SeparateRims", On(ini, "Main", "SeperateRims", g.separate_rims));
-    g.disappearing_wheels_fix = On(ini, "Fixes", "DisappearingWheelsFix", g.disappearing_wheels_fix);
     g.secondary_logo_fix = On(ini, "Fixes", "SecondaryLogoFix", g.secondary_logo_fix);
     g.addon_cops_damage_fix = On(ini, "Fixes", "AddOnCopsDamageFix", g.addon_cops_damage_fix);
     g.challenge_series_name_fix = On(ini, "Fixes", "ChallengeSeriesOpponentNameFix", g.challenge_series_name_fix);
