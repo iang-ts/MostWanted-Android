@@ -391,3 +391,39 @@ after = true
 at = 0x256276
 call = "UnlimiterCamberRear"
 after = true
+
+# CarRenderConn::UpdateRenderMatrix (0x24F100), esi the conn, its CarRenderInfo at +0x44. Each fld leaves the
+# vault's value on the FPU stack and the body kit's EXTRA_PITCH / RIDE_HEIGHT goes over it, as the PC mod's two
+# caves do. The pitch is the ecar attribute 0xE95257C2 the call above just looked up; the height is the ecar's
+# own +0xFC, which the PC's Attrib.h has at the same place
+[[hook]]
+at = 0x24F1E0
+call = "UnlimiterExtraPitch"
+after = true
+
+[[hook]]
+at = 0x24F212
+call = "UnlimiterRideHeight"
+after = true
+
+# RenderFrontEndCars (0x2579E0), where edi is the CarRenderInfo and the load is the ecar's ReflectionOffset at
+# +0xF4 of its attributes, again where the PC has it
+[[hook]]
+at = 0x257ADD
+call = "UnlimiterReflectionOffset"
+after = true
+
+# Attrib_Gen_ecar_ExtraRearTireOffset (0x240160) has just answered a pointer to the vault's float, with edi the
+# CarRenderInfo. The kit's value cannot be written through that pointer, which every car of the type shares, so
+# the hook hands back a float of its own instead
+[[hook]]
+at = 0x256586
+call = "UnlimiterRearTireOffset"
+after = true
+
+# TireState::DoSkids about to be called from CarRenderConn::UpdateTires (0x24E820). Before the call, so the five
+# arguments are still on the stack: the skid width at +16 becomes the kit's tire width, and the tire matrix at +8
+# is swapped for a copy with the mark moved to the tire's edge, leaving the wheel record itself alone
+[[hook]]
+at = 0x24EFF2
+call = "UnlimiterSkidWidth"
