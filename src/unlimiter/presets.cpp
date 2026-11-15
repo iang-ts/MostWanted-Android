@@ -157,19 +157,33 @@ void SnapshotPresets() {
     LOGR("unlimiter: presets of %s kept", name.c_str());
 }
 
-struct BonusCar {
-    std::string preset;
-    int handle = -1;
-    uint32_t category = 0xF0008;
-};
+// where an entry came from. BonusCar-1 is the ini's own default, the M3GTR the game puts in a fresh profile itself:
+// the PC reads it into a struct apart from the list, so it takes the career category and none of the unlock fields,
+// and the lookup below, which only ever answers for the bonus category, never finds it
+enum class BonusSource { Fallback, Numbered, Folder };
 
-void ReadBonus(const Ini& ini, const std::string& section, std::vector<BonusCar>& out, bool folder) {
-    if (!ini.Has(section, "PresetName") && !folder) return;
+void ReadBonus(const Ini& ini, const std::string& section, std::vector<BonusCar>& out, BonusSource from) {
     BonusCar car;
     car.preset = ini.Text(section, "PresetName");
-    car.handle = ini.Int(section, "CarRecordID", folder ? -1 : 0x12345678);
-    car.category = uint32_t(ini.Int(section, "Category", folder ? 0xF0008 : 0xF0020));
-    if (!car.preset.empty()) out.push_back(std::move(car));
+    if (car.preset.empty()) return;
+    bool fallback = from == BonusSource::Fallback;
+    car.handle = ini.Int(section, "CarRecordID", fallback ? 0x12345678 : -1);
+    car.category = uint32_t(ini.Int(section, "Category", fallback ? 0xF0020 : 0xF0008));
+    if (!fallback) {
+        car.ce_only = ini.Int(section, "CEOnly", 0) != 0;
+        car.condition = ini.Int(section, "UnlockConditionType", -1);
+        car.blacklist = ini.Int(section, "Blacklist", 15);
+        car.unlock_text = ini.Hash(section, "UnlockConditionString", 0xFFFFFFFF);
+    }
+    // a folder ini naming a preset the numbered list already has replaces it, which is the only place the PC merges
+    // by name: two numbered entries for one preset stay two, and each makes a record of its own
+    if (from == BonusSource::Folder)
+        for (BonusCar& had : out)
+            if (had.preset == car.preset) {
+                had = std::move(car);
+                return;
+            }
+    out.push_back(std::move(car));
 }
 
 const std::vector<BonusCar>& BonusCars() {
@@ -178,13 +192,32 @@ const std::vector<BonusCar>& BonusCars() {
         const Ini& ini = Data("_BonusCars.ini");
         int count = ini.Int("BonusCars", "NumberOfBonusCars", -2);
         if (count == -2) return out;
-        ReadBonus(ini, "BonusCar-1", out, false);
-        for (int i = 0; i <= count; i++) ReadBonus(ini, "BonusCar" + std::to_string(i), out, false);
-        for (const Ini& file : Folder("BonusCars")) ReadBonus(file, "BonusCar", out, true);
-        LOGR("unlimiter: %zu bonus cars", out.size());
+        ReadBonus(ini, "BonusCar-1", out, BonusSource::Fallback);
+        for (int i = 0; i <= count; i++) ReadBonus(ini, "BonusCar" + std::to_string(i), out, BonusSource::Numbered);
+        for (const Ini& file : Folder("BonusCars")) ReadBonus(file, "BonusCar", out, BonusSource::Folder);
+        size_t ruled = 0;
+        for (const BonusCar& car : out) ruled += car.condition >= 0;
+        LOGR("unlimiter: %zu bonus cars, %zu with an unlock condition", out.size(), ruled);
         return out;
     }();
     return cars;
+}
+
+// FEHashUpper (0x157E40): BinHash's h * 33 over the name in upper case. FEPlayerCarDB::CreateCarRecord (0x140570)
+// stores it at the new record's +0 as the handle, which is what the unlock and the car lot look a preset up by
+uint32_t FeHash(const std::string& text) {
+    uint32_t h = 0xFFFFFFFF;
+    for (unsigned char c : text) h = h * 33 + (c >= 'a' && c <= 'z' ? c - 0x20 : c);
+    return h;
+}
+
+// an entry of the ini keyed by the handle its preset name hashes to. Only the bonus category answers, as the PC's
+// own lookup does, and a CarRecordID of its own takes a car out of reach here: ProfileCars writes it over the hash
+// the game left at +0, so nothing matches it any more and the game keeps the last word on that car
+const BonusCar* BonusCarOf(uint32_t handle) {
+    for (const BonusCar& car : BonusCars())
+        if (car.category == 0xF0008 && FeHash(car.preset) == handle) return &car;
+    return nullptr;
 }
 
 uint32_t PresetName(const std::string& text) {

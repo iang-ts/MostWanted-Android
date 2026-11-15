@@ -77,6 +77,18 @@ struct GlobalSettings {
     bool disable_kit_wheel_modifications = false, test_career_customization = false, force_signals_on = false;
 };
 
+// an entry of _BonusCars.ini. The unlock fields belong to the numbered and folder entries alone: BonusCar-1 is the
+// M3GTR a fresh profile already starts with, which the PC keeps in a struct of its own and never looks up
+struct BonusCar {
+    std::string preset;
+    int handle = -1;             // CarRecordID, -1 to keep the handle the game hashes out of the preset name
+    uint32_t category = 0xF0008;  // the record's filter bits: 0xF0000 to be shown at all, 8 for a bonus car
+    bool ce_only = false;
+    int condition = -1;          // UnlockConditionType, -1 leaving the answer to the game
+    int blacklist = 15;
+    uint32_t unlock_text = 0xFFFFFFFF;
+};
+
 bool Imported();
 bool Active();
 bool Ready();
@@ -116,6 +128,8 @@ void ApplyFixes();
 void Frame(X86Context& ctx);
 void ExpandPools();
 void RestorePresets(uint32_t profile);
+// the ini's bonus car a record's handle stands for, null when it names none of them (presets.cpp)
+const BonusCar* BonusCarOf(uint32_t handle);
 void SnapshotPresets();
 void SavePresets();
 
